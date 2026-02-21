@@ -20,6 +20,7 @@ import {
   Avatar,
   Badge,
   Divider,
+  Tooltip,
   Empty
 } from '@arco-design/web-react';
 import {
@@ -570,7 +571,7 @@ export default function App() {
                           title={t('stat.activeConnections')}
                           value={activePortsCount}
                           style={{ marginLeft: 16 }}
-                          styleValue={{ color: '#0fbf60', fontWeight: 'bold' }}
+                          styleValue={{ fontWeight: 'bold' }}
                         />
                       </Space>
                     </Grid.Col>
@@ -616,10 +617,20 @@ export default function App() {
                         extra={
                           <Space>
                             <Radio.Group type="button" value={viewMode} onChange={setViewMode} size="small">
-                              <Radio value="list"><IconList /></Radio>
-                              <Radio value="grid"><IconApps /></Radio>
+                              <Radio value="list">
+                                <Tooltip content={t('tooltip.listView')}>
+                                  <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconList /></div>
+                                </Tooltip>
+                              </Radio>
+                              <Radio value="grid">
+                                <Tooltip content={t('tooltip.gridView')}>
+                                  <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconApps /></div>
+                                </Tooltip>
+                              </Radio>
                             </Radio.Group>
-                            <Button icon={<IconRefresh />} type="text" onClick={() => fetchPorts(false)} loading={loading} />
+                            <Tooltip content={t('tooltip.refreshPorts')}>
+                              <Button icon={<IconRefresh />} type="text" onClick={() => fetchPorts(false)} loading={loading} />
+                            </Tooltip>
                           </Space>
                         }
                       >
@@ -644,7 +655,11 @@ export default function App() {
                       <Card
                         title={<Space><IconCode /> {t('panel.terminal')}</Space>}
                         bordered={false}
-                        extra={<Button size="small" type="text" icon={<IconDelete />} onClick={() => setLogs([])} />}
+                        extra={
+                          <Tooltip content={t('tooltip.clearLogs')}>
+                            <Button size="small" type="text" icon={<IconDelete />} onClick={() => setLogs([])} />
+                          </Tooltip>
+                        }
                       >
                         <div className="no-scrollbar" style={{
                           height: 400,
@@ -716,23 +731,31 @@ export default function App() {
                         </Form.Item>
 
                         <Form.Item label={t('control.content')}>
-                          <Input.TextArea
-                            rows={6}
-                            placeholder={t('control.placeholder')}
-                            value={sendContent}
-                            onChange={setSendContent}
-                            onPressEnter={(e) => {
-                              if (!e.shiftKey) {
-                                e.preventDefault();
-                                handleSend();
-                              }
-                            }}
-                          />
+                          <Tooltip
+                            content={t('tooltip.sendContent')}
+                            trigger="focus"
+                            position="top"
+                          >
+                            <Input.TextArea
+                              rows={6}
+                              placeholder={t('control.placeholder')}
+                              value={sendContent}
+                              onChange={setSendContent}
+                              onPressEnter={(e) => {
+                                if (!e.shiftKey) {
+                                  e.preventDefault();
+                                  handleSend();
+                                }
+                              }}
+                            />
+                          </Tooltip>
                         </Form.Item>
 
-                        <Button type="primary" long icon={<IconSend />} loading={sending} onClick={handleSend} size="large">
-                          {t('control.sendPayload')}
-                        </Button>
+                        <Tooltip content={t('tooltip.sendPayload')}>
+                          <Button type="primary" long icon={<IconSend />} loading={sending} onClick={handleSend} size="large">
+                            {t('control.sendPayload')}
+                          </Button>
+                        </Tooltip>
                       </Form>
                     </Card>
 
