@@ -551,52 +551,52 @@ export default function App() {
                     <Grid.Col span={6}>
                       <Space align="center">
                         <Avatar size={54} style={{ backgroundColor: '#e8f3ff' }}>
-                          <img alt="total-ports" src="//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/288b89194e657603ff40db39e8072640.svg~tplv-49unhts6dw-image.image" />
+                          <img alt="total-ports" src="/icons/total-ports.svg" />
                         </Avatar>
                         <Statistic
                           title={t('stat.totalPorts')}
                           value={totalPortsCount}
                           style={{ marginLeft: 16 }}
-                          valueStyle={{ fontWeight: 'bold' }}
+                          styleValue={{ fontWeight: 'bold' }}
                         />
                       </Space>
                     </Grid.Col>
                     <Grid.Col span={6}>
                       <Space align="center">
                         <Avatar size={54} style={{ backgroundColor: '#e8ffea' }}>
-                          <img alt="active-connections" src="//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/fdc66b07224cdf18843c6076c2587eb5.svg~tplv-49unhts6dw-image.image" />
+                          <img alt="active-connections" src="/icons/active-connections.svg" />
                         </Avatar>
                         <Statistic
                           title={t('stat.activeConnections')}
                           value={activePortsCount}
                           style={{ marginLeft: 16 }}
-                          valueStyle={{ color: '#0fbf60', fontWeight: 'bold' }}
+                          styleValue={{ color: '#0fbf60', fontWeight: 'bold' }}
                         />
                       </Space>
                     </Grid.Col>
                     <Grid.Col span={6}>
                       <Space align="center">
                         <Avatar size={54} style={{ backgroundColor: '#e8f3ff' }}>
-                          <img alt="rx-packets" src="//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/77d74c9a245adeae1ec7fb5d4539738d.svg~tplv-49unhts6dw-image.image" />
+                          <img alt="rx-packets" src="/icons/rx-packets.svg" />
                         </Avatar>
                         <Statistic
                           title={t('stat.rxPackets')}
                           value={logs.filter(l => l.includes('[RX]')).length}
                           style={{ marginLeft: 16 }}
-                          valueStyle={{ fontWeight: 'bold' }}
+                          styleValue={{ fontWeight: 'bold' }}
                         />
                       </Space>
                     </Grid.Col>
                     <Grid.Col span={6}>
                       <Space align="center">
                         <Avatar size={54} style={{ backgroundColor: '#fff7e8' }}>
-                          <img alt="tx-packets" src="//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/c8b36e26d2b9bb5dbf9b74dd6d7345af.svg~tplv-49unhts6dw-image.image" />
+                          <img alt="tx-packets" src="/icons/tx-packets.svg" />
                         </Avatar>
                         <Statistic
                           title={t('stat.txPackets')}
                           value={logs.filter(l => l.includes('[TX]')).length}
                           style={{ marginLeft: 16 }}
-                          valueStyle={{ fontWeight: 'bold' }}
+                          styleValue={{ fontWeight: 'bold' }}
                         />
                       </Space>
                     </Grid.Col>
