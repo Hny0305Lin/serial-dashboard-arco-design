@@ -72,7 +72,9 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list'); // 'list' | 'grid'
+  const [rxCount, setRxCount] = useState(0);
 
+  const [txCount, setTxCount] = useState(0);
   // 发送相关
   const [sendPath, setSendPath] = useState<string>('');
   const [sendContent, setSendContent] = useState('');
@@ -225,6 +227,7 @@ export default function App() {
                 cleanContent = content.substring(path.length + 2);
               }
               const newLog = `[${path}-RX] ${cleanContent}`;
+              setRxCount(prev => prev + 1);
               return [newLog, ...prev].slice(0, 200);
             });
           }
@@ -297,6 +300,7 @@ export default function App() {
               }),
             });
             setLogs(prev => [`[${values.path}-Auto] ${autoSend.content}`, ...prev].slice(0, 200));
+            setTxCount(prev => prev + 1);
           } catch (err) {
             console.error('Auto-Send failed', err);
             Message.warning('Auto-Send failed');
@@ -351,6 +355,7 @@ export default function App() {
       if (json.code === 0) {
         Message.success(t('msg.sendSuccess'));
         setLogs(prev => [`[${sendPath}-TX] ${sendContent}`, ...prev].slice(0, 200));
+        setTxCount(prev => prev + 1);
       } else {
         Message.error(json.msg || t('msg.sendFailed'));
       }
@@ -582,7 +587,7 @@ export default function App() {
                         </Avatar>
                         <Statistic
                           title={t('stat.rxPackets')}
-                          value={logs.filter(l => l.includes('[RX]')).length}
+                          value={rxCount}
                           style={{ marginLeft: 16 }}
                           styleValue={{ fontWeight: 'bold' }}
                         />
@@ -595,7 +600,7 @@ export default function App() {
                         </Avatar>
                         <Statistic
                           title={t('stat.txPackets')}
-                          value={logs.filter(l => l.includes('[TX]')).length}
+                          value={txCount}
                           style={{ marginLeft: 16 }}
                           styleValue={{ fontWeight: 'bold' }}
                         />
