@@ -30,7 +30,28 @@ export class PortManager extends EventEmitter {
   public async list(): Promise<PortInfo[]> {
     try {
       const ports = await SerialPort.list();
-      return ports.map(p => ({
+
+      // 过滤掉 Windows 标准端口 (COM1) 和无效端口
+      const validPorts = ports.filter(p => {
+        // 1. 精准过滤：基于 PnpId 过滤 ACPI\PNP0501 (标准 COM 口)
+        if (p.pnpId && (p.pnpId.includes('ACPI') && p.pnpId.includes('PNP0501'))) {
+          return false;
+        }
+
+        // 2. 备选过滤：如果厂商名称非常明确是“标准端口类型”
+        if (p.manufacturer && (p.manufacturer.includes('标准端口类型') || p.manufacturer.includes('Standard port types'))) {
+          return false;
+        }
+
+        // 3. 过滤掉没有 pnpId 的端口 (通常是原生串口)
+        if (!p.pnpId) {
+          return false;
+        }
+
+        return true;
+      });
+
+      return validPorts.map(p => ({
         path: p.path,
         manufacturer: p.manufacturer,
         serialNumber: p.serialNumber,

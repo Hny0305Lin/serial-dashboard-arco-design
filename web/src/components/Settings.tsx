@@ -8,21 +8,42 @@ interface AutoSendConfig {
   encoding: 'hex' | 'utf8';
 }
 
+export interface SerialFilterConfig {
+  enabled: boolean;
+  vendorId: string;
+  productId: string;
+  interfaceId: string;
+}
+
 interface SettingsProps {
   autoSendConfig: AutoSendConfig;
   onAutoSendConfigChange: (config: AutoSendConfig) => void;
+  serialFilter: SerialFilterConfig;
+  onSerialFilterChange: (config: SerialFilterConfig) => void;
   sendEncoding: 'hex' | 'utf8';
   onSendEncodingChange: (encoding: 'hex' | 'utf8') => void;
 }
 
-export default function Settings({ autoSendConfig, onAutoSendConfigChange, sendEncoding, onSendEncodingChange }: SettingsProps) {
+export default function Settings({
+  autoSendConfig,
+  onAutoSendConfigChange,
+  serialFilter,
+  onSerialFilterChange,
+  sendEncoding,
+  onSendEncodingChange
+}: SettingsProps) {
   const { t } = useTranslation();
   const [form] = Form.useForm();
+  const [filterForm] = Form.useForm();
 
   // 监听外部状态变化，同步到表单
   useEffect(() => {
     form.setFieldsValue(autoSendConfig);
   }, [autoSendConfig]);
+
+  useEffect(() => {
+    filterForm.setFieldsValue(serialFilter);
+  }, [serialFilter]);
 
   const handleSendEncodingChange = (val: any) => {
     onSendEncodingChange(val);
@@ -30,16 +51,21 @@ export default function Settings({ autoSendConfig, onAutoSendConfigChange, sendE
   };
 
   const handleAutoSendChange = (_changedValues: Partial<AutoSendConfig>, allValues: AutoSendConfig) => {
-    // 合并配置，防止因表单项隐藏导致字段丢失
-    // 注意：当 Switch 关闭时，下方的 Form.Item 会被移除，allValues 中可能缺少 content/encoding
     const newConfig = { ...autoSendConfig, ...allValues };
-
-    // 只有当配置真正改变时才更新状态
     if (JSON.stringify(newConfig) !== JSON.stringify(autoSendConfig)) {
       onAutoSendConfigChange(newConfig);
       Message.success(t('settings.saveSuccess'));
     }
   };
+
+  const handleSerialFilterChange = (_changedValues: Partial<SerialFilterConfig>, allValues: SerialFilterConfig) => {
+    const newConfig = { ...serialFilter, ...allValues };
+    if (JSON.stringify(newConfig) !== JSON.stringify(serialFilter)) {
+      onSerialFilterChange(newConfig);
+      Message.success(t('settings.saveSuccess'));
+    }
+  };
+
 
   return (
     <Card title={t('menu.settings')} bordered={false}>
@@ -69,6 +95,36 @@ export default function Settings({ autoSendConfig, onAutoSendConfigChange, sendE
             {t('settings.general.dataFormatDesc')}
           </Typography.Text>
         </Form.Item>
+      </Form>
+
+      <Form
+        form={filterForm}
+        layout="vertical"
+        initialValues={serialFilter}
+        onValuesChange={(changed, values) => handleSerialFilterChange(changed, values as SerialFilterConfig)}
+      >
+        <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
+        <Typography.Text type="secondary" style={{ marginBottom: 16, display: 'block' }}>
+          {t('settings.deviceAdaptation.description')}
+        </Typography.Text>
+
+        <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked">
+          <Switch />
+        </Form.Item>
+
+        {serialFilter.enabled && (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <Form.Item label={t('settings.deviceAdaptation.vendorId')} field="vendorId" style={{ flex: 1, minWidth: 120 }}>
+              <Input placeholder="e.g. 19D1" />
+            </Form.Item>
+            <Form.Item label={t('settings.deviceAdaptation.productId')} field="productId" style={{ flex: 1, minWidth: 120 }}>
+              <Input placeholder="e.g. 0001" />
+            </Form.Item>
+            <Form.Item label={t('settings.deviceAdaptation.interfaceId')} field="interfaceId" style={{ flex: 1, minWidth: 120 }}>
+              <Input placeholder="e.g. 02" />
+            </Form.Item>
+          </div>
+        )}
       </Form>
 
       <Form

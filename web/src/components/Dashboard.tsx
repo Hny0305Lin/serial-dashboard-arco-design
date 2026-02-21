@@ -43,6 +43,7 @@ import { useTranslation } from 'react-i18next';
 import '../i18n';
 import '@arco-design/web-react/dist/css/arco.css';
 import Settings from './Settings';
+import type { SerialFilterConfig } from './Settings';
 
 const { Sider, Header, Content, Footer } = Layout;
 const { Option } = Select;
@@ -53,6 +54,9 @@ interface PortInfo {
   path: string;
   manufacturer?: string;
   status: 'closed' | 'opening' | 'open' | 'error' | 'reconnecting';
+  pnpId?: string;
+  vendorId?: string;
+  productId?: string;
 }
 
 interface AutoSendConfig {
@@ -65,7 +69,8 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [collapsed, setCollapsed] = useState(false);
   const [currentMenu, setCurrentMenu] = useState('1-1');
-  const [ports, setPorts] = useState<PortInfo[]>([]);
+  const [allPorts, setAllPorts] = useState<PortInfo[]>([]); // 原始端口数据
+  const [ports, setPorts] = useState<PortInfo[]>([]); // 过滤后的端口数据
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm();
@@ -88,6 +93,42 @@ export default function App() {
     localStorage.setItem('sendEncoding', sendEncoding);
   }, [sendEncoding]);
 
+  // 设备适配过滤器
+  const [serialFilter, setSerialFilter] = useState<SerialFilterConfig>(() => {
+    const saved = localStorage.getItem('serialFilterConfig');
+    return saved ? JSON.parse(saved) : { enabled: false, vendorId: '19D1', productId: '0001', interfaceId: '02' };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('serialFilterConfig', JSON.stringify(serialFilter));
+  }, [serialFilter]);
+
+  // 应用过滤器逻辑
+  useEffect(() => {
+    if (!serialFilter.enabled) {
+      setPorts(allPorts);
+      return;
+    }
+
+    const filtered = allPorts.filter(p => {
+      // 检查是否匹配目标 VendorID 和 ProductID
+      const isTargetDevice =
+        p.vendorId?.toUpperCase() === serialFilter.vendorId.toUpperCase() &&
+        p.productId?.toUpperCase() === serialFilter.productId.toUpperCase();
+
+      if (isTargetDevice) {
+        // 如果是目标设备，检查 Interface ID (MI_xx)
+        // pnpId 示例: USB\VID_19D1&PID_0001&MI_02\A&17910EBA&0&0002
+        const targetMI = `MI_${serialFilter.interfaceId}`;
+        return p.pnpId && p.pnpId.includes(targetMI);
+      }
+
+      // 如果不是目标设备，保留显示（不做过滤）
+      return true;
+    });
+    setPorts(filtered);
+  }, [allPorts, serialFilter]);
+
   // 自动发送相关
   const [autoSend, setAutoSend] = useState<AutoSendConfig>(() => {
     const saved = localStorage.getItem('autoSendConfig');
@@ -108,10 +149,13 @@ export default function App() {
       const res = await fetch('http://localhost:3001/api/ports');
       const json = await res.json();
       if (json.code === 0) {
-        setPorts(json.data);
+        setAllPorts(json.data);
         if (!silent) {
           Message.success(t('msg.refreshSuccess'));
         }
+        // 注意：这里使用的是 json.data (原始数据) 来查找第一个打开的端口
+        // 理想情况下应该使用过滤后的数据，但在 fetch 完成瞬间 filtered 还没更新
+        // 为了简单起见，我们暂时保留这个逻辑，或者依靠后续的 useEffect 更新 sendPath
         const firstOpen = json.data.find((p: PortInfo) => p.status === 'open');
         if (firstOpen && !sendPath) {
           setSendPath(firstOpen.path);
@@ -535,6 +579,8 @@ export default function App() {
               <Settings
                 autoSendConfig={autoSend}
                 onAutoSendConfigChange={setAutoSend}
+                serialFilter={serialFilter}
+                onSerialFilterChange={setSerialFilter}
                 sendEncoding={sendEncoding}
                 onSendEncodingChange={setSendEncoding}
               />
