@@ -1,7 +1,7 @@
 {
-  "name": "serialport",
+  "name": "serial-dashboard-arco-design",
   "version": "1.0.0",
-  "description": "",
+  "description": "A web-based serial port commander and dashboard with real-time monitoring and control.",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
