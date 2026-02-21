@@ -105,7 +105,9 @@ export default function Settings({
       >
         <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
         <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: serialFilter.enabled ? 24 : 0 }}>
-          <Switch />
+          <Tooltip content={t('tooltip.deviceFilterEnable')}>
+            <Switch />
+          </Tooltip>
         </Form.Item>
 
         {serialFilter.enabled && (
