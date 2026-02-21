@@ -1,4 +1,4 @@
-# Web Serial Commander
+# Serial-dashboard-arco-design
 
 ## 🚀 功能优化与 UI 重构 (UI/UX Refactoring)
 
