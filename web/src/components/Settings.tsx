@@ -104,27 +104,32 @@ export default function Settings({
         onValuesChange={(changed, values) => handleSerialFilterChange(changed, values as SerialFilterConfig)}
       >
         <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
-        <Typography.Text type="secondary" style={{ marginBottom: 16, display: 'block' }}>
-          {t('settings.deviceAdaptation.description')}
-        </Typography.Text>
-
-        <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked">
+        <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: serialFilter.enabled ? 24 : 0 }}>
           <Switch />
         </Form.Item>
 
         {serialFilter.enabled && (
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <Form.Item label={t('settings.deviceAdaptation.vendorId')} field="vendorId" style={{ flex: 1, minWidth: 120 }}>
-              <Input placeholder="e.g. 19D1" />
+              <Tooltip content={t('tooltip.vendorId')} trigger="hover">
+                <Input placeholder="e.g. 19D1" />
+              </Tooltip>
             </Form.Item>
             <Form.Item label={t('settings.deviceAdaptation.productId')} field="productId" style={{ flex: 1, minWidth: 120 }}>
-              <Input placeholder="e.g. 0001" />
+              <Tooltip content={t('tooltip.productId')} trigger="hover">
+                <Input placeholder="e.g. 0001" />
+              </Tooltip>
             </Form.Item>
             <Form.Item label={t('settings.deviceAdaptation.interfaceId')} field="interfaceId" style={{ flex: 1, minWidth: 120 }}>
-              <Input placeholder="e.g. 02" />
+              <Tooltip content={t('tooltip.interfaceId')} trigger="hover">
+                <Input placeholder="e.g. 02" />
+              </Tooltip>
             </Form.Item>
           </div>
         )}
+        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+          {t('settings.deviceAdaptation.description')}
+        </Typography.Text>
       </Form>
 
       <Form
@@ -135,11 +140,8 @@ export default function Settings({
       >
 
         <Divider orientation="left">{t('settings.autoSend.title')}</Divider>
-        <Typography.Text type="secondary" style={{ marginBottom: 16, display: 'block' }}>
-          {t('settings.autoSend.description')}
-        </Typography.Text>
 
-        <Form.Item label={t('settings.autoSend.enable')} field="enabled" triggerPropName="checked">
+        <Form.Item label={t('settings.autoSend.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: autoSendConfig.enabled ? 24 : 0 }}>
           <Tooltip content={t('tooltip.autoSendEnable')}>
             <Switch />
           </Tooltip>
@@ -168,6 +170,9 @@ export default function Settings({
             </Form.Item>
           </>
         )}
+        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+          {t('settings.autoSend.description')}
+        </Typography.Text>
       </Form>
     </Card>
   );
