@@ -1,0 +1,98 @@
+import React, { useState, useEffect } from 'react';
+import { Card, Form, Radio, Input, Switch, Typography, Divider, Button, Message } from '@arco-design/web-react';
+import { useTranslation } from 'react-i18next';
+
+interface AutoSendConfig {
+  enabled: boolean;
+  content: string;
+  encoding: 'hex' | 'utf8';
+}
+
+interface SettingsProps {
+  autoSendConfig: AutoSendConfig;
+  onAutoSendConfigChange: (config: AutoSendConfig) => void;
+  sendEncoding: 'hex' | 'utf8';
+  onSendEncodingChange: (encoding: 'hex' | 'utf8') => void;
+}
+
+export default function Settings({ autoSendConfig, onAutoSendConfigChange, sendEncoding, onSendEncodingChange }: SettingsProps) {
+  const { t } = useTranslation();
+  const [form] = Form.useForm();
+  
+  // 监听外部状态变化，同步到表单
+  useEffect(() => {
+    form.setFieldsValue(autoSendConfig);
+  }, [autoSendConfig]);
+
+  const handleSendEncodingChange = (val: any) => {
+    onSendEncodingChange(val);
+    Message.success(t('settings.saveSuccess'));
+  };
+
+  const handleAutoSendChange = (_changedValues: Partial<AutoSendConfig>, allValues: AutoSendConfig) => {
+    // 合并配置，防止因表单项隐藏导致字段丢失
+    // 注意：当 Switch 关闭时，下方的 Form.Item 会被移除，allValues 中可能缺少 content/encoding
+    const newConfig = { ...autoSendConfig, ...allValues };
+
+    // 只有当配置真正改变时才更新状态
+    if (JSON.stringify(newConfig) !== JSON.stringify(autoSendConfig)) {
+        onAutoSendConfigChange(newConfig);
+        Message.success(t('settings.saveSuccess'));
+    }
+  };
+
+  return (
+    <Card title={t('menu.settings')} bordered={false}>
+      <Typography.Title heading={6}>{t('settings.title')}</Typography.Title>
+      
+      {/* 全局发送配置 */}
+      <Divider orientation="left">{t('settings.general.title')}</Divider>
+      <Form layout="vertical">
+        <Form.Item label={t('settings.general.dataFormat')} style={{ marginBottom: 24 }}>
+          <Radio.Group 
+            type="button" 
+            value={sendEncoding} 
+            onChange={handleSendEncodingChange}
+          >
+            <Radio value="hex">{t('text.hex')}</Radio>
+            <Radio value="utf8">{t('text.text')}</Radio>
+          </Radio.Group>
+          <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+            {t('settings.general.dataFormatDesc')}
+          </Typography.Text>
+        </Form.Item>
+      </Form>
+
+      <Form 
+        form={form} 
+        layout="vertical" 
+        initialValues={autoSendConfig} 
+        onValuesChange={(changed, values) => handleAutoSendChange(changed, values as AutoSendConfig)}
+      >
+        
+        <Divider orientation="left">{t('settings.autoSend.title')}</Divider>
+        <Typography.Text type="secondary" style={{ marginBottom: 16, display: 'block' }}>
+          {t('settings.autoSend.description')}
+        </Typography.Text>
+        
+        <Form.Item label={t('settings.autoSend.enable')} field="enabled" triggerPropName="checked">
+           <Switch />
+        </Form.Item>
+
+        {autoSendConfig.enabled && (
+          <>
+            <Form.Item label={t('settings.autoSend.format')} field="encoding">
+               <Radio.Group type="button">
+                  <Radio value="hex">{t('text.hex')}</Radio>
+                  <Radio value="utf8">{t('text.text')}</Radio>
+               </Radio.Group>
+            </Form.Item>
+            <Form.Item label={t('settings.autoSend.content')} field="content" rules={[{ required: true }]}>
+               <Input placeholder={t('settings.autoSend.placeholder')} />
+            </Form.Item>
+          </>
+        )}
+      </Form>
+    </Card>
+  );
+}

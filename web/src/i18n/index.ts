@@ -1,0 +1,135 @@
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+
+// 翻译资源
+const resources = {
+  en: {
+    translation: {
+      "app.title": "Serial Port Manager",
+      "menu.dashboard": "Dashboard",
+      "menu.visualization": "Data Visualization",
+      "menu.monitor": "Real-time Monitor",
+      "menu.workplace": "Workplace",
+      "menu.applications": "Applications",
+      "menu.workspace": "Admin System",
+      "header.welcome": "Welcome back, Developer",
+      "stat.totalPorts": "Total Ports",
+      "stat.activeConnections": "Active Connections",
+      "stat.rxPackets": "Packets Received",
+      "stat.txPackets": "Packets Sent",
+      "panel.terminal": "Terminal Output",
+      "panel.noLogs": "No output, situation concerning...",
+      "panel.quickInfo": "Quick Info",
+      "panel.quickInfoContent": "Press <1>Enter</1> to send. <br/>Use <1>Shift + Enter</1> for new line. <br/>Hex format: \"AA BB CC\" or \"AABBCC\".",
+      "control.targetPort": "Target Port",
+      "control.dataFormat": "Data Format",
+      "control.content": "Content",
+      "control.sendPayload": "Send Payload",
+      "control.placeholder": "Type message here...",
+      "text.hex": "Hex",
+      "text.text": "Text (UTF-8)",
+      "settings.title": "Serial Port Configuration",
+      "settings.general.title": "General Settings",
+      "settings.general.dataFormat": "Default Data Format",
+      "settings.general.dataFormatDesc": "The data format selected here will be used as the default for sending data in the Control Panel.",
+      "settings.autoSend.title": "Auto-Send on Connect",
+      "settings.autoSend.description": "Automatically send a data packet when a serial port is successfully opened. This is useful for waking up devices.",
+      "settings.autoSend.enable": "Enable Auto-Send",
+      "settings.autoSend.format": "Data Format",
+      "settings.autoSend.content": "Content",
+      "settings.autoSend.placeholder": "e.g. 00 or WakeUp",
+      "settings.saveSuccess": "Settings saved successfully",
+      "msg.openSuccess": "Port opened successfully",
+      "msg.closeSuccess": "Port closed successfully",
+      "msg.refreshSuccess": "Port list refreshed",
+      "msg.sendSuccess": "Data sent successfully",
+      "footer.copyright": "SerialPort Pro ©2026 Powered by Arco Design"
+    }
+  },
+  zh: {
+    translation: {
+      "app.title": "串口服务器管理",
+      "menu.dashboard": "仪表盘",
+      "menu.visualization": "数据可视化",
+      "menu.workplace": "工作台",
+      "menu.monitor": "实时监控",
+      "menu.settings": "设置",
+      "menu.applications": "应用列表",
+      "menu.workspace": "后台系统",
+      "settings.title": "串口配置",
+      "settings.general.title": "通用设置",
+      "settings.general.dataFormat": "默认发送格式",
+      "settings.general.dataFormatDesc": "在此选择的格式将作为控制面板中发送数据的默认格式。",
+      "settings.autoSend.title": "连接自动发送",
+      "settings.autoSend.description": "当串口成功打开时自动发送数据包。通常用于唤醒设备。",
+      "settings.autoSend.enable": "启用自动发送",
+      "settings.autoSend.format": "数据格式",
+      "settings.autoSend.content": "发送内容",
+      "settings.autoSend.placeholder": "例如 00 或 WakeUp",
+      "settings.saveSuccess": "设置保存成功",
+      "common.refresh": "刷新",
+      "common.open": "打开",
+      "common.close": "关闭",
+      "common.send": "发送",
+      "common.clear": "清空",
+      "common.success": "成功",
+      "common.error": "错误",
+      "header.welcome": "欢迎回来，开发者",
+      "stat.totalPorts": "端口总数",
+      "stat.activeConnections": "活跃连接",
+      "stat.rxPackets": "接收数据包",
+      "stat.txPackets": "发送数据包",
+      "port.path": "端口路径",
+      "port.manufacturer": "厂商信息",
+      "port.status": "状态",
+      "port.action": "操作",
+      "port.baudRate": "波特率",
+      "port.dataBits": "数据位",
+      "port.stopBits": "停止位",
+      "port.parity": "校验位",
+      "status.closed": "已关闭",
+      "status.opening": "打开中",
+      "status.open": "运行中",
+      "status.error": "错误",
+      "status.reconnecting": "重连中",
+      "panel.device": "设备列表",
+      "panel.logs": "实时日志",
+      "panel.control": "控制面板",
+      "panel.terminal": "终端输出",
+      "panel.noLogs": "输出为空，情况担忧....",
+      "panel.quickInfo": "快速指南",
+      "panel.quickInfoContent": "按 <1>Enter</1> 发送。<br/>按 <1>Shift + Enter</1> 换行。<br/>Hex 格式支持: \"AA BB CC\" 或 \"AABBCC\"。",
+      "control.targetPort": "目标端口",
+      "control.dataFormat": "数据格式",
+      "control.content": "发送内容",
+      "control.sendPayload": "发送数据",
+      "control.placeholder": "在此输入消息...",
+      "text.hex": "十六进制",
+      "text.text": "文本 (UTF-8)",
+      "modal.openPort": "打开串口",
+      "msg.openSuccess": "串口已成功打开",
+      "msg.closeSuccess": "串口已成功关闭",
+      "msg.refreshSuccess": "列表刷新成功",
+      "msg.sendSuccess": "发送成功",
+      "msg.sendFailed": "数据发送失败",
+      "input.placeholder": "输入 Hex (如 AABBCC) 或文本",
+      "input.encoding": "编码格式",
+      "lang.en": "English",
+      "lang.zh": "中文",
+      "footer.copyright": "SerialPort Pro ©2026 Powered by Arco Design"
+    }
+  }
+};
+
+i18n
+  .use(initReactI18next)
+  .init({
+    resources,
+    lng: "zh", // 默认语言
+    fallbackLng: "en",
+    interpolation: {
+      escapeValue: false
+    }
+  });
+
+export default i18n;
