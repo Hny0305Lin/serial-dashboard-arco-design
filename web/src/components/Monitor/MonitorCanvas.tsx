@@ -35,6 +35,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         -ms-overflow-style: none;
         scrollbar-width: none;
       }
+      .monitor-canvas-container {
+        background: radial-gradient(1200px 800px at 20% 0%, rgba(51, 112, 255, 0.06) 0%, rgba(244, 245, 247, 0.9) 55%, rgba(244, 245, 247, 1) 100%);
+      }
+      .monitor-widget {
+        will-change: transform, opacity;
+      }
     `;
     document.head.appendChild(style);
     return () => {
@@ -306,7 +312,21 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [editingWidget, setEditingWidget] = useState<MonitorWidget | null>(null);
+  const [appearingIds, setAppearingIds] = useState<Record<string, true>>({});
+  const [removingIds, setRemovingIds] = useState<Record<string, true>>({});
   const [form] = Form.useForm();
+
+  const updateWidgetById = useCallback((id: string, updater: (w: MonitorWidget) => MonitorWidget) => {
+    setWidgets(prev => {
+      const idx = prev.findIndex(w => w.id === id);
+      if (idx < 0) return prev;
+      const nextW = updater(prev[idx]);
+      if (nextW === prev[idx]) return prev;
+      const next = prev.slice();
+      next[idx] = nextW;
+      return next;
+    });
+  }, []);
 
   // 层级管理：置顶逻辑
   const bringToFront = (id: string) => {
@@ -335,6 +355,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleAddWidget = (type: MonitorWidget['type']) => {
+    let createdId: string | null = null;
     setWidgets(prev => {
       // 智能布局：寻找一个不重叠的位置
       // 算法：从当前视野中心开始，向外螺旋寻找空闲区域
@@ -412,6 +433,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         displayMode: 'text',
         logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`]
       };
+      createdId = newWidget.id;
 
       // 创建后直接打开编辑弹窗
       setTimeout(() => {
@@ -424,6 +446,16 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       return [...prev, newWidget];
     });
+    if (createdId) {
+      setAppearingIds(prev => ({ ...prev, [createdId as string]: true }));
+      window.setTimeout(() => {
+        setAppearingIds(prev => {
+          const next = { ...prev };
+          delete next[createdId as string];
+          return next;
+        });
+      }, 30);
+    }
   };
 
   const handleSaveWidget = async () => {
@@ -476,8 +508,16 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       title: t('monitor.deleteConfirm.title'),
       content: t('monitor.deleteConfirm.content'),
       onOk: () => {
-        setWidgets(prev => prev.filter(w => w.id !== id));
-        Message.success(t('monitor.deleteSuccess'));
+        setRemovingIds(prev => ({ ...prev, [id]: true }));
+        window.setTimeout(() => {
+          setWidgets(prev => prev.filter(w => w.id !== id));
+          setRemovingIds(prev => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          Message.success(t('monitor.deleteSuccess'));
+        }, 180);
       }
     });
   };
@@ -588,14 +628,11 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         if (resizingWidgetId && resizeStart) {
           const deltaX = (e.clientX - resizeStart.x) / canvasState.scale;
           const deltaY = (e.clientY - resizeStart.y) / canvasState.scale;
-
-          setWidgets(prev => prev.map(w =>
-            w.id === resizingWidgetId ? {
-              ...w,
-              width: Math.max(200, resizeStart.width + deltaX),
-              height: Math.max(150, resizeStart.height + deltaY)
-            } : w
-          ));
+          updateWidgetById(resizingWidgetId, (w) => ({
+            ...w,
+            width: Math.max(200, resizeStart.width + deltaX),
+            height: Math.max(150, resizeStart.height + deltaY)
+          }));
         } else {
           const deltaX = e.clientX - lastMousePos.current.x;
           const deltaY = e.clientY - lastMousePos.current.y;
@@ -607,9 +644,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               offsetY: prev.offsetY + deltaY
             }));
           } else if (draggedWidgetId) {
-            setWidgets(prev => prev.map(w =>
-              w.id === draggedWidgetId ? { ...w, x: w.x + deltaX, y: w.y + deltaY } : w
-            ));
+            updateWidgetById(draggedWidgetId, (w) => ({ ...w, x: w.x + deltaX, y: w.y + deltaY }));
           }
         }
 
@@ -692,7 +727,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       className="monitor-canvas-container"
       style={{
         width: '100%',
-        height: 'calc(100vh - 64px)', // 减去头部高度
+        height: '100%',
         overflow: 'hidden',
         position: 'relative',
         backgroundColor: '#f4f5f7',
@@ -703,11 +738,6 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     >
       {/* 网格背景 */}
       <div style={gridStyle} />
-
-      {/* 调试信息 (可选) */}
-      <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 9999, background: 'rgba(0,0,0,0.5)', color: '#fff', padding: '4px 8px', borderRadius: 4, fontSize: 12, pointerEvents: 'none' }}>
-        Canvas: ({Math.round(canvasState.offsetX)}, {Math.round(canvasState.offsetY)})
-      </div>
 
       {/* 编辑弹窗 */}
       <Modal
@@ -856,20 +886,20 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           className="monitor-widget"
           style={{
             position: 'absolute',
-            // 核心位置计算：组件坐标 + 画布偏移
-            left: widget.x + canvasState.offsetX,
-            top: widget.y + canvasState.offsetY,
+            left: 0,
+            top: 0,
             width: widget.width,
             height: widget.height,
             zIndex: widget.zIndex,
-            // 样式美化
             backgroundColor: '#fff',
             boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
             borderRadius: '4px',
             border: '1px solid #e5e6eb',
             display: 'flex',
             flexDirection: 'column',
-            transition: 'box-shadow 0.2s, transform 0.1s',
+            opacity: removingIds[widget.id] ? 0 : appearingIds[widget.id] ? 0 : 1,
+            transform: `translate3d(${widget.x + canvasState.offsetX}px, ${widget.y + canvasState.offsetY}px, 0) scale(${(removingIds[widget.id] || appearingIds[widget.id]) ? 0.98 : 1})`,
+            transition: (draggedWidgetId === widget.id || resizingWidgetId === widget.id || isDragging) ? 'none' : 'opacity 160ms ease, transform 160ms ease, box-shadow 0.2s',
           }}
           // 点击组件时置顶，并阻止事件冒泡（防止触发画布拖拽）
           onMouseDown={(e) => handleWidgetMouseDown(e, widget.id)}

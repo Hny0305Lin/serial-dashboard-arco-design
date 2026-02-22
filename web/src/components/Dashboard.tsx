@@ -60,6 +60,11 @@ function AppContent() {
   const location = useLocation();
 
   const [collapsed, setCollapsed] = useState(false);
+  const [headerHidden, setHeaderHidden] = useState(false);
+  const [siderHidden, setSiderHidden] = useState(false);
+  const [isF11Fullscreen, setIsF11Fullscreen] = useState(false);
+  const prevCollapsedRef = useRef<boolean | null>(null);
+  const immersiveActiveRef = useRef(false);
   const [currentMenu, setCurrentMenu] = useState('1-1');
   const [allPorts, setAllPorts] = useState<PortInfo[]>([]); // 原始端口数据
   const [ports, setPorts] = useState<PortInfo[]>([]); // 过滤后的端口数据
@@ -96,6 +101,52 @@ function AppContent() {
       setCurrentMenu('1-1');
     }
   }, [location]);
+
+  const isMonitor = location.pathname === '/monitor';
+
+  useEffect(() => {
+    const computeFullscreen = () => {
+      if (document.fullscreenElement) return true;
+      const sw = window.screen?.width || 0;
+      const sh = window.screen?.height || 0;
+      const w = window.innerWidth || 0;
+      const h = window.innerHeight || 0;
+      if (!sw || !sh || !w || !h) return false;
+      return Math.abs(sw - w) <= 4 && Math.abs(sh - h) <= 4;
+    };
+
+    const update = () => setIsF11Fullscreen(computeFullscreen());
+    update();
+
+    window.addEventListener('resize', update);
+    document.addEventListener('fullscreenchange', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      document.removeEventListener('fullscreenchange', update);
+    };
+  }, []);
+
+  const shouldImmersive = isMonitor && isF11Fullscreen;
+  useEffect(() => {
+    if (shouldImmersive === immersiveActiveRef.current) return;
+
+    if (shouldImmersive) {
+      prevCollapsedRef.current = collapsed;
+      setCollapsed(true);
+      setSiderHidden(true);
+      setHeaderHidden(true);
+      immersiveActiveRef.current = true;
+      return;
+    }
+
+    setSiderHidden(false);
+    setHeaderHidden(false);
+    if (prevCollapsedRef.current !== null) {
+      setCollapsed(prevCollapsedRef.current);
+      prevCollapsedRef.current = null;
+    }
+    immersiveActiveRef.current = false;
+  }, [shouldImmersive, collapsed]);
 
   // 设备适配过滤器
   const [serialFilter, setSerialFilter] = useState<SerialFilterConfig>(() => {
@@ -472,103 +523,107 @@ function AppContent() {
     <>
 
       <Layout style={{ height: '100vh', background: '#f4f5f7', overflow: 'hidden' }}>
-        <Sider
-          width={240}
-          collapsed={collapsed}
-          onCollapse={setCollapsed}
-          collapsible
-          trigger={null}
-          breakpoint="xl"
-          style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)' }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <div style={{ height: 64, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
-              <Space>
-                <div style={{ width: 32, height: 32, background: 'url(//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/dfdba5317c0c20ce20e64fac803d52bc.svg~tplv-49unhts6dw-image.image) no-repeat center/contain' }}></div>
-                {!collapsed && <span>SerialPort</span>}
-              </Space>
-            </div>
-            <Menu
-              style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}
-              selectedKeys={[currentMenu]}
-              onClickMenuItem={(key) => {
-                if (key === '1-1') history.push('/');
-                if (key === '1-2') history.push('/monitor');
-                if (key === '3') history.push('/settings');
-                setCurrentMenu(key);
-              }}
-              collapse={collapsed}
-              autoOpen
-              hasCollapseButton={false}
-            >
-              {menuRoutes.map((route) => {
-                if (route.children) {
-                  return (
-                    <SubMenu
-                      key={route.key}
-                      title={
-                        <span>
-                          {route.icon}
-                          <span style={{ marginLeft: 10 }}>{route.name}</span>
-                        </span>
-                      }
-                    >
-                      {route.children.map((child) => (
-                        <MenuItem key={child.key}>{child.name}</MenuItem>
-                      ))}
-                    </SubMenu>
-                  );
-                }
-                return (
-                  <MenuItem key={route.key}>
-                    {route.icon}
-                    <span style={{ marginLeft: 10 }}>{route.name}</span>
-                  </MenuItem>
-                );
-              })}
-            </Menu>
-            <div
-              style={{
-                height: 48,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: collapsed ? 'center' : 'flex-end',
-                padding: collapsed ? 0 : '0 12px',
-              }}
-            >
-              <Button
-                type="text"
-                size="small"
-                onClick={() => setCollapsed(!collapsed)}
-                icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
-                style={{
-                  color: 'var(--color-text-2)',
-                  fontSize: 16,
-                  width: 28,
-                  height: 28,
-                  marginTop: 10,
+        {!siderHidden && (
+          <Sider
+            width={240}
+            collapsed={collapsed}
+            onCollapse={setCollapsed}
+            collapsible
+            trigger={null}
+            breakpoint="xl"
+            style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)' }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <div style={{ height: 64, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
+                <Space>
+                  <div style={{ width: 32, height: 32, background: 'url(//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/dfdba5317c0c20ce20e64fac803d52bc.svg~tplv-49unhts6dw-image.image) no-repeat center/contain' }}></div>
+                  {!collapsed && <span>SerialPort</span>}
+                </Space>
+              </div>
+              <Menu
+                style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}
+                selectedKeys={[currentMenu]}
+                onClickMenuItem={(key) => {
+                  if (key === '1-1') history.push('/');
+                  if (key === '1-2') history.push('/monitor');
+                  if (key === '3') history.push('/settings');
+                  setCurrentMenu(key);
                 }}
-              />
+                collapse={collapsed}
+                autoOpen
+                hasCollapseButton={false}
+              >
+                {menuRoutes.map((route) => {
+                  if (route.children) {
+                    return (
+                      <SubMenu
+                        key={route.key}
+                        title={
+                          <span>
+                            {route.icon}
+                            <span style={{ marginLeft: 10 }}>{route.name}</span>
+                          </span>
+                        }
+                      >
+                        {route.children.map((child) => (
+                          <MenuItem key={child.key}>{child.name}</MenuItem>
+                        ))}
+                      </SubMenu>
+                    );
+                  }
+                  return (
+                    <MenuItem key={route.key}>
+                      {route.icon}
+                      <span style={{ marginLeft: 10 }}>{route.name}</span>
+                    </MenuItem>
+                  );
+                })}
+              </Menu>
+              <div
+                style={{
+                  height: 48,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: collapsed ? 'center' : 'flex-end',
+                  padding: collapsed ? 0 : '0 12px',
+                }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => setCollapsed(!collapsed)}
+                  icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+                  style={{
+                    color: 'var(--color-text-2)',
+                    fontSize: 16,
+                    width: 28,
+                    height: 28,
+                    marginTop: 10,
+                  }}
+                />
+              </div>
             </div>
-          </div>
-        </Sider>
-        <Layout className="no-scrollbar" style={{ overflowY: 'auto' }}>
-          <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Space>
-              <Breadcrumb separator={<svg fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 48 48" aria-hidden="true" focusable="false" className="arco-icon arco-icon-oblique-line"><path d="M29.506 6.502 18.493 41.498"></path></svg>}>
-                <Breadcrumb.Item>
-                  <IconApps style={{ fontSize: 20, color: '#4E5969' }} />
-                </Breadcrumb.Item>
-                {getBreadcrumb()}
-              </Breadcrumb>
-            </Space>
-            <Space size="medium">
-              <Button shape="circle" icon={<IconLanguage />} onClick={toggleLang} />
-              <Avatar size={32} style={{ backgroundColor: '#3370ff' }}><IconUser /></Avatar>
-            </Space>
-          </Header>
+          </Sider>
+        )}
+        <Layout className="no-scrollbar" style={isMonitor ? { overflow: 'hidden' } : { overflowY: 'auto' }}>
+          {!headerHidden && (
+            <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Space>
+                <Breadcrumb separator={<svg fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 48 48" aria-hidden="true" focusable="false" className="arco-icon arco-icon-oblique-line"><path d="M29.506 6.502 18.493 41.498"></path></svg>}>
+                  <Breadcrumb.Item>
+                    <IconApps style={{ fontSize: 20, color: '#4E5969' }} />
+                  </Breadcrumb.Item>
+                  {getBreadcrumb()}
+                </Breadcrumb>
+              </Space>
+              <Space size="medium">
+                <Button shape="circle" icon={<IconLanguage />} onClick={toggleLang} />
+                <Avatar size={32} style={{ backgroundColor: '#3370ff' }}><IconUser /></Avatar>
+              </Space>
+            </Header>
+          )}
 
-          <Content style={{ padding: '16px 24px' }}>
+          <Content style={isMonitor ? { padding: 0, overflow: 'hidden' } : { padding: '16px 24px' }}>
             <Switch>
               <Route path="/settings">
                 <Settings
@@ -620,9 +675,11 @@ function AppContent() {
               </Route>
             </Switch>
           </Content>
-          <Footer style={{ textAlign: 'center', color: '#86909c', padding: '16px 0' }}>
-            {t('footer.copyright')}
-          </Footer>
+          {!isMonitor && (
+            <Footer style={{ textAlign: 'center', color: '#86909c', padding: '16px 0' }}>
+              {t('footer.copyright')}
+            </Footer>
+          )}
         </Layout>
 
         <Modal
