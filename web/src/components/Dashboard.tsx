@@ -36,6 +36,7 @@ import '@arco-design/web-react/dist/css/arco.css';
 import Settings from './Settings';
 import type { SerialFilterConfig } from './Settings';
 import DashboardHome from './DashboardHome';
+import MonitorCanvas from './Monitor/MonitorCanvas';
 import type { PortInfo } from '../types';
 
 import LogSavePage from './LogSavePage';
@@ -179,15 +180,15 @@ function AppContent() {
   const [debugMode, setDebugMode] = useState(true); // 默认开启调试模式
 
   // 切换视图模式时自动刷新设备列表
-  useEffect(() => {
-    fetchPorts(true).then(() => {
-      Message.success(t('msg.viewChanged'));
-    });
-  }, [viewMode]);
+  // useEffect(() => {
+  //   fetchPorts(true).then(() => {
+  //     Message.success(t('msg.viewChanged'));
+  //   });
+  // }, [viewMode]);
 
   useEffect(() => {
     // 初始加载列表
-    fetchPorts(true);
+    // fetchPorts(true);
 
     // Setup WebSocket
     if (wsRef.current) {
@@ -469,17 +470,7 @@ function AppContent() {
 
   return (
     <>
-      <style>
-        {`
-          .no-scrollbar::-webkit-scrollbar {
-            display: none;
-          }
-          .no-scrollbar {
-            -ms-overflow-style: none;  /* IE and Edge */
-            scrollbar-width: none;  /* Firefox */
-          }
-        `}
-      </style>
+
       <Layout style={{ height: '100vh', background: '#f4f5f7', overflow: 'hidden' }}>
         <Sider
           width={240}
@@ -590,10 +581,12 @@ function AppContent() {
                 />
               </Route>
               <Route path="/monitor">
-                <div style={{ textAlign: 'center', marginTop: 100 }}>
-                  <Typography.Title heading={3}>{t('menu.monitor')}</Typography.Title>
-                  <Typography.Text>Coming Soon...</Typography.Text>
-                </div>
+                <MonitorCanvas
+                  ws={ws}
+                  wsConnected={wsConnected}
+                  portList={ports.map(p => p.path)}
+                  onRefreshPorts={() => fetchPorts(true)}
+                />
               </Route>
               <Route path="/save-logs">
                 <LogSavePage currentLogs={logs} />

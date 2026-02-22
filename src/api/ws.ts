@@ -22,9 +22,17 @@ export function createWsServer(server: Server, portManager: PortManager) {
   };
 
   // 监听 PortManager 事件并广播
+  console.log('[WS] Setting up PortManager listeners...');
   portManager.on('status', (event) => {
-    console.log(`[WS] Status change: ${event.path} -> ${event.status}`);
+    console.log(`[WS] Status change event received: ${event.path} -> ${event.status}`);
+    console.log(`[WS] Broadcasting status: ${event.path} -> ${event.status}`);
     broadcast({ type: 'serial:status', ...event });
+
+    // 广播 serial:opened 消息，适配前端自动发送逻辑
+    if (event.status === 'open') {
+      console.log(`[WS] Broadcasting serial:opened for ${event.path}`);
+      broadcast({ type: 'serial:opened', path: event.path });
+    }
   });
 
   portManager.on('packet', (event) => {
@@ -44,11 +52,13 @@ export function createWsServer(server: Server, portManager: PortManager) {
   // 为了确保所有数据都能发出去，我们监听 data 事件
   // 前端收到数据后自行去重或展示
   portManager.on('data', (event) => {
-    console.log(`[WS] Raw data from ${event.path}: ${event.data.length} bytes`);
+    // console.log(`[WS] Raw data from ${event.path}: ${event.data.length} bytes`);
 
     // 为了适配前端现有的解析逻辑 (msg.data.raw.data)
     // 我们构造一个符合 buffer JSON 序列化的结构
     const bufferJson = event.data.toJSON(); // { type: 'Buffer', data: [...] }
+
+    console.log(`[WS] Broadcasting serial:data for ${event.path} (${event.data.length} bytes)`);
 
     broadcast({
       type: 'serial:data',
@@ -65,11 +75,38 @@ export function createWsServer(server: Server, portManager: PortManager) {
     ws.on('message', (message) => {
       try {
         const parsed: WsMessage = JSON.parse(message.toString());
-        console.log('Received:', parsed);
+        // console.log('Received:', parsed);
 
         // 处理客户端指令
         if (parsed.type === 'subscribe') {
           // TODO: 实现按需订阅
+        }
+
+        // 处理发送数据指令
+        if (parsed.type === 'serial:send' && parsed.path && parsed.data) {
+          const { path, data, encoding = 'hex' } = parsed;
+          let buffer: Buffer;
+          try {
+            if (encoding === 'hex') {
+              // 移除空格并转为 buffer
+              // 过滤掉所有非 hex 字符
+              const hexString = data.replace(/[^0-9A-Fa-f]/g, '');
+              if (hexString.length % 2 !== 0) {
+                console.warn('[WS] Hex string length is odd, may cause issues');
+              }
+              buffer = Buffer.from(hexString, 'hex');
+            } else {
+              buffer = Buffer.from(data, 'utf8');
+            }
+
+            console.log(`[WS] Writing to ${path}:`, buffer);
+
+            portManager.write(path, buffer).catch(err => {
+              console.error(`[WS] Write error to ${path}:`, err);
+            });
+          } catch (err) {
+            console.error('[WS] Buffer creation error:', err);
+          }
         }
       } catch (e) {
         console.error('Invalid WS message:', e);

@@ -75,11 +75,17 @@ export class PortManager extends EventEmitter {
     // 如果已经存在且处于非关闭状态，直接返回或报错
     if (this.ports.has(path)) {
       const existing = this.ports.get(path);
+      // 如果状态是 open 或 opening，才报错
       if (existing?.status === 'open' || existing?.status === 'opening') {
-        throw new Error(`Port ${path} is already open or opening.`);
+        // 幂等性优化：如果已经打开，视为成功
+        console.log(`Port ${path} is already open, skipping...`);
+        return;
       }
-      // 如果是 closed/error 状态，可以重新打开，先清理旧实例
-      // 必须等待旧实例完全关闭，否则会导致事件重复监听
+
+      // 如果状态是 closed/error/reconnecting，但 map 中仍有记录
+      // 我们需要先彻底清理旧实例，再创建新实例
+      // 这里的 close 调用会清理 map 和 timer
+      console.log(`Port ${path} exists but status is ${existing?.status}, cleaning up before reopen...`);
       await this.close(path);
     }
 
@@ -108,22 +114,35 @@ export class PortManager extends EventEmitter {
 
     // 4. 关闭实例
     return new Promise((resolve, reject) => {
+      // 移除所有监听器，避免关闭过程中的 error 事件导致 promise reject
+      // 我们希望 close 操作是尽最大努力成功的
+      managed.instance.removeAllListeners();
+
+      // 无论如何，我们都认为这个端口在逻辑上已经关闭了
+      // 即使底层 close 报错，也不影响我们清理 map
+      this.updateStatus(path, 'closed');
+
+      // 强制清理引用，防止内存泄漏或状态残留
+      // 如果 SerialPort 实例有 destroy 方法，也应该调用（虽然 v10+ 主要靠 close）
+      if ((managed.instance as any).destroy) {
+        try { (managed.instance as any).destroy(); } catch (e) { }
+      }
+
       if (managed.instance.isOpen) {
         managed.instance.close((err) => {
           if (err) {
             console.error(`Error closing port ${path}:`, err);
-            // 即使底层报错，管理层也认为已关闭
-            this.updateStatus(path, 'closed', err);
-            reject(err);
+            // 这里我们记录错误，但依然 resolve，因为逻辑上的关闭已经完成了
+            // reject(err); 
+            resolve();
           } else {
-            // 手动关闭成功，手动触发状态更新
             console.log(`Port ${path} closed manually.`);
-            this.updateStatus(path, 'closed');
             resolve();
           }
         });
       } else {
-        this.updateStatus(path, 'closed');
+        // 如果实例虽然 isOpen 为 false，但可能底层资源未释放
+        // 尝试销毁（如果 SerialPort 提供了 destroy 方法，但在 v10+ 中通常 close 就够了）
         resolve();
       }
     });
@@ -182,13 +201,19 @@ export class PortManager extends EventEmitter {
     // 绑定事件（包括 data 事件）
     this.bindEvents(managed);
 
+    // 默认启用 raw data 模式
     // 执行打开
     port.open((err) => {
       if (err) {
         console.error(`Failed to open port ${path}:`, err.message);
-        // 如果打开失败，从 map 中移除，并抛出错误事件
         this.ports.delete(path);
         this.emit('status', { path, status: 'error', error: err.message });
+      } else {
+        // 打开成功后，尝试设置 DTR/RTS，某些设备需要这个才能发送数据
+        port.set({ dtr: true, rts: true }, (err) => {
+          if (err) console.warn(`[PortManager] Failed to set DTR/RTS for ${path}:`, err.message);
+          else console.log(`[PortManager] DTR/RTS set for ${path}`);
+        });
       }
       // 成功打开的状态更新交由 'open' 事件监听器处理，避免重复触发
     });
@@ -201,14 +226,25 @@ export class PortManager extends EventEmitter {
     // 监听 open 事件
     instance.on('open', () => {
       console.log(`Port ${path} opened successfully.`);
+      console.log(`[PortManager] Config: BaudRate=${config.baudRate}, Data=${config.dataBits}, Stop=${config.stopBits}, Parity=${config.parity}`);
+
       managed.reconnectAttempts = 0;
       this.updateStatus(path, 'open');
+
+      // 🔍 调试探针：发送一条测试数据证明管道通畅
+      // 这条数据不是来自串口，而是后端模拟的，用于验证 WS 链路
+      setTimeout(() => {
+        const testMsg = Buffer.from(`[System] Port ${path} opened. Pipeline check OK.`);
+        this.emit('data', { path, data: testMsg });
+      }, 500);
     });
 
-    // 监听 data 事件 - 关键！
-    instance.on('data', (data: Buffer) => {
-      console.log(`[PortManager] Received data from ${path}:`, data.toString('hex'));
-      this.emit('data', { path, data });
+    instance.on('readable', () => {
+      let chunk: Buffer | null;
+      while ((chunk = instance.read()) !== null) {
+        console.log(`[PortManager] RAW DATA from ${path} (Length: ${chunk.length}):`, chunk.toString('hex').toUpperCase());
+        this.emit('data', { path, data: chunk });
+      }
     });
 
     // 监听 error 事件
@@ -221,67 +257,47 @@ export class PortManager extends EventEmitter {
     instance.on('close', () => {
       console.log(`Port ${path} closed.`);
       this.updateStatus(path, 'closed');
-      // 如果不是手动关闭（map 中还存在），尝试重连
+
+      // 意外关闭处理策略：
+      // 如果是非手动关闭（map 中还存在），说明是意外断开（如拔线）
+      // 原策略：自动重连（可能导致日志刷屏和资源占用）
+      // 新策略：直接清理资源，标记为关闭，等待用户手动重连
       if (this.ports.has(path)) {
-        this.handleUnexpectedClose(path);
+        console.log(`Port ${path} disconnected unexpectedly. Cleaning up...`);
+        // 调用 close 方法彻底清理资源（移除监听器、删除 map 记录等）
+        // 注意：这里不需要 await，因为我们已经在 close 回调里了
+        this.close(path).catch(err => {
+          console.error(`Error cleaning up after unexpected close for ${path}:`, err);
+        });
       }
     });
   }
 
   private updateStatus(path: string, status: PortStatus, error?: Error) {
+    console.log(`[PortManager] updateStatus called: ${path} -> ${status}`);
     const managed = this.ports.get(path);
     if (managed) {
       managed.status = status;
+      this.emit('status', {
+        path,
+        status,
+        error: error?.message,
+        timestamp: Date.now()
+      });
+      console.log(`[PortManager] Emitted status event: ${path} -> ${status}`);
+    } else {
+      console.error(`[PortManager] updateStatus failed: Port ${path} not found in map`);
     }
-    this.emit('status', {
-      path,
-      status,
-      error: error?.message,
-      timestamp: Date.now()
-    });
   }
 
   private handleError(path: string, error: Error) {
     this.updateStatus(path, 'error', error);
-    this.handleUnexpectedClose(path);
-  }
-
-  private handleUnexpectedClose(path: string) {
-    const managed = this.ports.get(path);
-    if (!managed) return;
-
-    // 只有在非 closed 且非 reconnecting 状态下才尝试重连
-    // (如果用户手动 close，map 中已经删除了，不会走到这)
-
-    if (managed.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS) {
-      const delay = Math.min(
-        this.INITIAL_RECONNECT_DELAY * Math.pow(2, managed.reconnectAttempts),
-        this.MAX_RECONNECT_DELAY
-      );
-
-      managed.reconnectAttempts++;
-      this.updateStatus(path, 'reconnecting');
-      console.log(`Attempting to reconnect ${path} in ${delay}ms (Attempt ${managed.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})...`);
-
-      managed.reconnectTimer = setTimeout(() => {
-        if (!this.ports.has(path)) return; // 期间可能被手动关闭了
-        console.log(`Reconnecting ${path}...`);
-
-        // 尝试重新打开
-        // 注意：SerialPort 实例出错关闭后，通常需要重新 open() 即可，或者重新 new 一个
-        // 稳妥起见，我们重新 open() 现有的
-        managed.instance.open((err) => {
-          if (err) {
-            console.error(`Reconnect failed for ${path}:`, err.message);
-            this.handleError(path, err); // 递归调用，触发下一次重连
-          }
-        });
-      }, delay);
-
-    } else {
-      console.error(`Max reconnect attempts reached for ${path}. Giving up.`);
-      this.updateStatus(path, 'error', new Error('Max reconnect attempts reached'));
-      // 可以选择是否保留在 map 中，这里保留以便用户查询状态，但不再自动重试
+    // 出错后也不再自动重连，而是直接清理
+    if (this.ports.has(path)) {
+      console.log(`Port ${path} encountered error. Cleaning up...`);
+      this.close(path).catch(err => {
+        console.error(`Error cleaning up after error for ${path}:`, err);
+      });
     }
   }
 }

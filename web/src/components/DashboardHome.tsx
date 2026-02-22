@@ -30,6 +30,7 @@ import {
 import { useHistory } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { PortInfo } from '../types';
+import TerminalLogView from './TerminalLogView';
 
 const { Option } = Select;
 
@@ -311,56 +312,7 @@ export default function DashboardHome(props: DashboardHomeProps) {
                 </Space>
               }
             >
-              <div className="no-scrollbar" style={{
-                height: 400,
-                background: '#1e1e1e',
-                borderRadius: 4,
-                padding: 12,
-                overflowY: 'auto',
-                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                fontSize: 13,
-                color: '#d4d4d4'
-              }}>
-                {logs.length === 0 && <Empty description={t('panel.noLogs')} />}
-                {logs.map((log, idx) => (
-                  <div key={idx} style={{ marginBottom: 4, lineHeight: '1.4', display: 'flex' }}>
-                    <div style={{ width: 24, flexShrink: 0, textAlign: 'center' }}>
-                      {log.includes('-TX]') && <span style={{ color: '#569cd6' }}>➜</span>}
-                      {log.includes('-RX]') && <span style={{ color: '#4ec9b0' }}>➜</span>}
-                      {log.includes('-Auto]') && <span style={{ color: '#d7ba7d' }}>#</span>}
-                      {(log.includes('-Status]') || log.startsWith('[Status]')) && <span style={{ color: '#ce9178' }}>ℹ</span>}
-                      {log.startsWith('[System]') && <span style={{ color: '#6a9955' }}>#</span>}
-                    </div>
-                    <div style={{ flex: 1, wordBreak: 'break-all' }}>
-                      {/* 简单的文本处理，提取标签和内容 */}
-                      {(() => {
-                        // 匹配 [Tag] Content 格式
-                        // Tag 可以是 [COM1-TX], [System], [Status] 等
-                        // 即使内容为空，也能匹配到，确保空内容的日志也能正确显示标签
-                        const match = log.match(/^(\[[^\]]+\])\s*(.*)$/);
-                        if (match) {
-                          return (
-                            <div style={{ display: 'flex' }}>
-                              {/* 增加 minWidth 到 120 以容纳更长的 [COM10-TX] */}
-                              <span style={{
-                                marginRight: 8,
-                                opacity: 0.8,
-                                fontFamily: 'Consolas, monospace',
-                                flexShrink: 0, // 防止标签被压缩
-                                color: 'inherit' // 强制继承父级颜色，防止被其他样式覆盖
-                              }}>
-                                {match[1]}
-                              </span>
-                              <span style={{ flex: 1, whiteSpace: 'pre-wrap' }}>{match[2]}</span>
-                            </div>
-                          );
-                        }
-                        return log;
-                      })()}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <TerminalLogView logs={logs} emptyText={t('panel.noLogs')} height={400} />
             </Card>
           </Space>
         </Grid.Col>
