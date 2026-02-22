@@ -480,7 +480,7 @@ function AppContent() {
           }
         `}
       </style>
-      <Layout style={{ height: '100vh', background: '#f4f5f7' }}>
+      <Layout style={{ height: '100vh', background: '#f4f5f7', overflow: 'hidden' }}>
         <Sider
           width={240}
           collapsed={collapsed}
@@ -561,11 +561,13 @@ function AppContent() {
             </div>
           </div>
         </Sider>
-        <Layout>
+        <Layout className="no-scrollbar" style={{ overflowY: 'auto' }}>
           <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
               <Breadcrumb separator={<svg fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 48 48" aria-hidden="true" focusable="false" className="arco-icon arco-icon-oblique-line"><path d="M29.506 6.502 18.493 41.498"></path></svg>}>
-                <Breadcrumb.Item>{t('menu.workspace')}</Breadcrumb.Item>
+                <Breadcrumb.Item>
+                  <IconApps style={{ fontSize: 20, color: '#4E5969' }} />
+                </Breadcrumb.Item>
                 {getBreadcrumb()}
               </Breadcrumb>
             </Space>

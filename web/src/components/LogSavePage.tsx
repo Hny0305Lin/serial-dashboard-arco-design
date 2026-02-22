@@ -38,7 +38,6 @@ interface LogEntry {
   title: string;
   description: string;
   size: number;
-  preview: string;
   tags: string[];
 }
 
@@ -52,8 +51,6 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
   const [form] = Form.useForm();
 
   const [historyList, setHistoryList] = useState<LogEntry[]>([]);
-  const [previewVisible, setPreviewVisible] = useState(false);
-  const [previewContent, setPreviewContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [pendingFormats, setPendingFormats] = useState<string[]>([]);
@@ -244,7 +241,6 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       title: values.title || 'Untitled Log',
       description: values.description || '',
       size: size,
-      preview: content.substring(0, 200) + (content.length > 200 ? '...' : ''),
       tags: formats // Use formats as tags
     };
 
@@ -284,17 +280,6 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       title: t('common.action'),
       render: (_: any, record: LogEntry) => (
         <Space>
-          <Button
-            type="text"
-            size="small"
-            icon={<IconEye />}
-            onClick={() => {
-              setPreviewContent(record.preview);
-              setPreviewVisible(true);
-            }}
-          >
-            {t('common.preview')}
-          </Button>
           <Button
             type="text"
             status="danger"
@@ -378,11 +363,45 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
           </div>
         </Card>
 
-        {/* Bottom: Settings & History (Two Columns) */}
+        {/* Bottom: History & Settings (Swapped) */}
         <div style={{ display: 'flex', gap: 16, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch' }}>
-          {/* Left: Save Settings */}
+          {/* Left: History */}
           <div style={{ flex: 1, minWidth: 400, display: 'flex' }}>
-            <Card title={t('log.saveSettings')} bordered={false} style={{ width: '100%', display: 'flex', flexDirection: 'column' }} bodyStyle={{ flex: 1 }}>
+            <Card
+              title={t('log.history')}
+              bordered={false}
+              style={{ width: '100%' }}
+              bodyStyle={{ height: '400px', display: 'flex', flexDirection: 'column' }}
+              extra={
+                <Button
+                  type="text"
+                  status="danger"
+                  size="small"
+                  onClick={() => {
+                    setHistoryList([]);
+                    localStorage.removeItem('logHistory');
+                    Message.success(t('msg.deleteSuccess'));
+                  }}
+                >
+                  {t('common.clearAll')}
+                </Button>
+              }
+            >
+              <Table
+                columns={columns}
+                data={historyList}
+                rowKey="id"
+                pagination={{ pageSize: 5 }}
+                noDataElement={<Empty description={t('common.noHistory')} />}
+                scroll={{ y: 280 }}
+                style={{ flex: 1 }}
+              />
+            </Card>
+          </div>
+
+          {/* Right: Save Settings */}
+          <div style={{ flex: 1, minWidth: 400, display: 'flex' }}>
+            <Card title={t('log.saveSettings')} bordered={false} style={{ width: '100%', display: 'flex', flexDirection: 'column' }} bodyStyle={{ height: '400px', display: 'flex', flexDirection: 'column' }}>
               <Form form={form} layout="vertical" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                 <Form.Item label={t('log.filename')} field="title" rules={[{ required: true }]}>
                   <Input placeholder={t('log.filenamePlaceholder')} />
@@ -423,54 +442,8 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
               </Form>
             </Card>
           </div>
-
-          {/* Right: History */}
-          <div style={{ flex: 1, minWidth: 400, display: 'flex' }}>
-            <Card
-              title={t('log.history')}
-              bordered={false}
-              style={{ width: '100%' }}
-              bodyStyle={{ height: '100%' }}
-              extra={
-                <Button
-                  type="text"
-                  status="danger"
-                  size="small"
-                  onClick={() => {
-                    setHistoryList([]);
-                    localStorage.removeItem('logHistory');
-                    Message.success(t('msg.deleteSuccess'));
-                  }}
-                >
-                  {t('common.clearAll')}
-                </Button>
-              }
-            >
-              <Table
-                columns={columns}
-                data={historyList}
-                rowKey="id"
-                pagination={{ pageSize: 5 }}
-                noDataElement={<Empty description={t('common.noHistory')} />}
-                scroll={{ y: 300 }}
-              />
-            </Card>
-          </div>
         </div>
       </div>
-
-      {/* Preview Modal */}
-      <Modal
-        title={t('log.previewDetail')}
-        visible={previewVisible}
-        onOk={() => setPreviewVisible(false)}
-        onCancel={() => setPreviewVisible(false)}
-        footer={null}
-      >
-        <div style={{ maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-          {previewContent}
-        </div>
-      </Modal>
 
       {/* Compress Confirm Modal */}
       <Modal
