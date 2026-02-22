@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { IconDragDotVertical, IconClose, IconExpand, IconPlus, IconCode, IconSettings, IconThunderbolt, IconLink, IconStop } from '@arco-design/web-react/icon';
+import { IconDragDotVertical, IconClose, IconExpand, IconPlus, IconCode, IconSettings, IconThunderbolt, IconLink, IconStop, IconDownload } from '@arco-design/web-react/icon';
 import { Card, Button, Space, Typography, Empty, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message, Badge } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
@@ -9,6 +9,14 @@ const { Row, Col } = Grid;
 
 // 初始状态为空
 const INITIAL_WIDGETS: MonitorWidget[] = [];
+const MONITOR_LAYOUT_STORAGE_KEY = 'monitorCanvasLayoutV1';
+
+type StoredMonitorWidgetV1 = Omit<MonitorWidget, 'logs' | 'isConnected'>;
+type StoredMonitorLayoutV1 = {
+  version: 1;
+  canvasState: CanvasState;
+  widgets: StoredMonitorWidgetV1[];
+};
 
 export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected: boolean; portList?: string[]; onRefreshPorts?: () => void }) {
   const { t } = useTranslation();
@@ -33,13 +41,158 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       document.head.removeChild(style);
     };
   }, []);
-  const [canvasState, setCanvasState] = useState<CanvasState>({ offsetX: 0, offsetY: 0, scale: 1 });
+  const defaultCanvasState: CanvasState = { offsetX: 0, offsetY: 0, scale: 1 };
+  const [canvasState, setCanvasState] = useState<CanvasState>(defaultCanvasState);
   const [isDragging, setIsDragging] = useState(false);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [resizingWidgetId, setResizingWidgetId] = useState<string | null>(null);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const lastMousePos = useRef({ x: 0, y: 0 });
   const decoderRef = useRef<TextDecoder>(new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }));
+  const [restoreChecked, setRestoreChecked] = useState(false);
+  const lastPersistRef = useRef<string>('');
+  const saveTimerRef = useRef<number | null>(null);
+  const restorePromptShownRef = useRef(false);
+
+  const sanitizeWidgetForStorage = (w: MonitorWidget): StoredMonitorWidgetV1 => ({
+    id: w.id,
+    type: w.type,
+    title: w.title,
+    x: w.x,
+    y: w.y,
+    width: w.width,
+    height: w.height,
+    zIndex: w.zIndex,
+    portPath: w.portPath,
+    baudRate: w.baudRate,
+    dataBits: w.dataBits,
+    stopBits: w.stopBits,
+    parity: w.parity,
+    subtitle: w.subtitle,
+    showSubtitle: w.showSubtitle,
+    autoSend: w.autoSend,
+    displayMode: w.displayMode
+  });
+
+  const hydrateWidgetFromStorage = (w: Partial<StoredMonitorWidgetV1>): MonitorWidget => {
+    const id = w.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const type = (w.type as MonitorWidget['type']) || 'terminal';
+    const autoSend = w.autoSend
+      ? {
+        enabled: !!w.autoSend.enabled,
+        content: w.autoSend.content || '',
+        encoding: w.autoSend.encoding === 'utf8' ? 'utf8' : 'hex'
+      }
+      : { enabled: false, content: '', encoding: 'hex' as const };
+    const displayMode = w.displayMode || 'text';
+
+    return {
+      id,
+      type,
+      title: w.title || t('monitor.newTerminal'),
+      x: typeof w.x === 'number' ? w.x : 0,
+      y: typeof w.y === 'number' ? w.y : 0,
+      width: typeof w.width === 'number' ? w.width : 400,
+      height: typeof w.height === 'number' ? w.height : 300,
+      zIndex: typeof w.zIndex === 'number' ? w.zIndex : 1,
+      portPath: w.portPath,
+      baudRate: w.baudRate || 9600,
+      dataBits: w.dataBits || 8,
+      stopBits: w.stopBits || 1,
+      parity: w.parity || 'none',
+      subtitle: w.subtitle,
+      showSubtitle: w.showSubtitle ?? true,
+      autoSend: autoSend as { enabled: boolean; content: string; encoding: 'hex' | 'utf8' },
+      displayMode,
+      logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`],
+      isConnected: false
+    };
+  };
+
+  useEffect(() => {
+    if (restorePromptShownRef.current) return;
+    restorePromptShownRef.current = true;
+
+    const raw = localStorage.getItem(MONITOR_LAYOUT_STORAGE_KEY);
+    if (!raw) {
+      setRestoreChecked(true);
+      return;
+    }
+
+    let parsed: StoredMonitorLayoutV1 | null = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
+      setRestoreChecked(true);
+      return;
+    }
+
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.widgets)) {
+      localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
+      setRestoreChecked(true);
+      return;
+    }
+
+    Modal.confirm({
+      title: t('monitor.layout.restoreTitle'),
+      content: t('monitor.layout.restoreContent'),
+      okText: t('monitor.layout.restoreOk'),
+      cancelText: t('monitor.layout.restoreCancel'),
+      onOk: () => {
+        const nextCanvas = parsed?.canvasState && typeof parsed.canvasState === 'object' ? parsed.canvasState : defaultCanvasState;
+        const nextWidgets = parsed?.widgets ? parsed.widgets.map(hydrateWidgetFromStorage) : [];
+        setCanvasState(nextCanvas);
+        setWidgets(nextWidgets);
+        setRestoreChecked(true);
+      },
+      onCancel: () => {
+        localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
+        setCanvasState(defaultCanvasState);
+        setWidgets([]);
+        setRestoreChecked(true);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!restoreChecked) return;
+
+    if (widgets.length === 0) {
+      localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
+      lastPersistRef.current = '';
+      return;
+    }
+
+    const payload: StoredMonitorLayoutV1 = {
+      version: 1,
+      canvasState,
+      widgets: widgets.map(sanitizeWidgetForStorage)
+    };
+
+    const persistString = JSON.stringify(payload);
+    if (persistString === lastPersistRef.current) return;
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    saveTimerRef.current = window.setTimeout(() => {
+      try {
+        localStorage.setItem(MONITOR_LAYOUT_STORAGE_KEY, persistString);
+        lastPersistRef.current = persistString;
+      } catch (e) {
+      }
+    }, 300);
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [restoreChecked, widgets, canvasState]);
 
   // WebSocket 数据处理
   useEffect(() => {
@@ -505,6 +658,34 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     zIndex: 0
   };
 
+  const handleExportLayout = () => {
+    try {
+      const payload: StoredMonitorLayoutV1 & { exportedAt: string } = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        canvasState,
+        widgets: widgets.map(sanitizeWidgetForStorage)
+      };
+
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+
+      const filename = `monitor-layout-${new Date().toISOString().slice(0, 10)}.json`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(url);
+      Message.success(t('monitor.layout.exportSuccess'));
+    } catch (e) {
+      Message.error(t('monitor.layout.exportFailed'));
+    }
+  };
+
   return (
     <div
       ref={containerRef}
@@ -658,9 +839,14 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       {/* 悬浮添加按钮 */}
       <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 1000 }}>
-        <Dropdown droplist={droplist} position='br'>
-          <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-        </Dropdown>
+        <Space>
+          <Tooltip content={t('monitor.layout.export')}>
+            <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+          </Tooltip>
+          <Dropdown droplist={droplist} position='br'>
+            <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+          </Dropdown>
+        </Space>
       </div>
 
       {/* 渲染循环 */}
