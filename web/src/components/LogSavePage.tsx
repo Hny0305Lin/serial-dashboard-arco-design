@@ -151,6 +151,9 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       setProgress(metadata.percent);
     });
 
+    // Correct size calculation for ZIP
+    const zipSize = blob.size;
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -163,6 +166,8 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       setShowProgress(false);
       Message.success(t('msg.downloadSuccess'));
     }, 500);
+
+    return zipSize; // Return actual size
   };
 
   const handleDownload = async () => {
@@ -172,6 +177,8 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       const formats = values.formats || ['txt'];
       const content = currentLogs.join('\n');
 
+      let finalSize = content.length; // Default to raw content size
+
       if (formats.length >= 2) {
         // Check if user has a saved preference
         const savedPreference = localStorage.getItem('zipPreference'); // 'zip' | 'files' | null
@@ -179,11 +186,14 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
         if (savedPreference) {
           setSaving(true);
           if (savedPreference === 'zip') {
-            await downloadZip(formats, baseFilename, content);
+            finalSize = await downloadZip(formats, baseFilename, content);
           } else {
             await downloadFiles(formats, baseFilename, content);
+            // Approximate size for multiple files (sum of content)
+            // Ideally we should sum up individual blob sizes, but raw content size * formats.length is a fair estimate for text
+            finalSize = content.length * formats.length;
           }
-          saveRecord(values, content, formats);
+          saveRecord(values, finalSize, formats, content); // Pass correct size
           setSaving(false);
           return;
         }
@@ -197,7 +207,7 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
       } else {
         setSaving(true);
         await downloadFiles(formats, baseFilename, content);
-        saveRecord(values, content, formats);
+        saveRecord(values, finalSize, formats, content);
         setSaving(false);
       }
 
@@ -216,8 +226,8 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
     }
 
     setSaving(true);
-    await downloadZip(pendingFormats, pendingValues.title || 'serial-logs', pendingContent);
-    saveRecord(pendingValues, pendingContent, pendingFormats);
+    const zipSize = await downloadZip(pendingFormats, pendingValues.title || 'serial-logs', pendingContent);
+    saveRecord(pendingValues, zipSize, pendingFormats, pendingContent); // Pass correct size
     setSaving(false);
   };
 
@@ -226,14 +236,14 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
     form.setFieldValue('formats', []);
   };
 
-  const saveRecord = (values: any, content: string, formats: string[]) => {
+  const saveRecord = (values: any, size: number, formats: string[], content: string) => {
     // Add to history
     const newEntry: LogEntry = {
       id: Date.now().toString(),
       timestamp: Date.now(),
       title: values.title || 'Untitled Log',
       description: values.description || '',
-      size: content.length,
+      size: size,
       preview: content.substring(0, 200) + (content.length > 200 ? '...' : ''),
       tags: formats // Use formats as tags
     };
@@ -429,6 +439,7 @@ export default function LogSavePage({ currentLogs }: LogSavePageProps) {
                   onClick={() => {
                     setHistoryList([]);
                     localStorage.removeItem('logHistory');
+                    Message.success(t('msg.deleteSuccess'));
                   }}
                 >
                   {t('common.clearAll')}
