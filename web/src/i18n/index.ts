@@ -19,6 +19,7 @@ const resources = {
       "stat.txPackets": "Packets Sent",
       "panel.terminal": "Terminal Output",
       "panel.noLogs": "No output, situation concerning...",
+      "common.noData": "No Data",
       "panel.quickInfo": "Quick Info",
       "panel.quickInfoContent": "Press <1>Enter</1> to send. <br/>Use <1>Shift + Enter</1> for new line. <br/>Hex format: \"AA BB CC\" or \"AABBCC\".",
       "control.targetPort": "Target Port",
@@ -63,6 +64,9 @@ const resources = {
       "msg.closeSuccess": "Port closed successfully",
       "msg.refreshSuccess": "Port list refreshed",
       "msg.sendSuccess": "Data sent successfully",
+      "msg.sendFailed": "Data sent failed",
+      "msg.viewChanged": "View switched and list refreshed successfully",
+      "input.placeholder": "Enter Hex (e.g. AABBCC) or Text",
       "footer.copyright": "SerialPort Pro ©2026 Powered by Arco Design"
     }
   },
@@ -114,6 +118,7 @@ const resources = {
       "common.clear": "清空",
       "common.success": "成功",
       "common.error": "错误",
+      "common.noData": "数据为空",
       "header.welcome": "欢迎回来，开发者",
       "stat.totalPorts": "端口总数",
       "stat.activeConnections": "活跃连接",
@@ -152,6 +157,7 @@ const resources = {
       "msg.refreshSuccess": "列表刷新成功",
       "msg.sendSuccess": "发送成功",
       "msg.sendFailed": "数据发送失败",
+      "msg.viewChanged": "列表切换并刷新成功",
       "input.placeholder": "输入 Hex (如 AABBCC) 或文本",
       "input.encoding": "编码格式",
       "lang.en": "English",

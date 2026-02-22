@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Layout,
-  Menu,
   Breadcrumb,
   Card,
   Space,
@@ -21,7 +20,8 @@ import {
   Badge,
   Divider,
   Tooltip,
-  Empty
+  Empty,
+  Menu
 } from '@arco-design/web-react';
 import {
   IconDashboard,
@@ -33,7 +33,6 @@ import {
   IconApps,
   IconThunderbolt,
   IconCode,
-  IconWifi,
   IconUser,
   IconMenuFold,
   IconMenuUnfold,
@@ -47,6 +46,8 @@ import type { SerialFilterConfig } from './Settings';
 
 const { Sider, Header, Content, Footer } = Layout;
 const { Option } = Select;
+const MenuItem = Menu.Item;
+const SubMenu = Menu.SubMenu;
 const FormItem = Form.Item;
 const { Row, Col } = Grid;
 
@@ -153,9 +154,7 @@ export default function App() {
         if (!silent) {
           Message.success(t('msg.refreshSuccess'));
         }
-        // 注意：这里使用的是 json.data (原始数据) 来查找第一个打开的端口
-        // 理想情况下应该使用过滤后的数据，但在 fetch 完成瞬间 filtered 还没更新
-        // 为了简单起见，我们暂时保留这个逻辑，或者依靠后续的 useEffect 更新 sendPath
+        // 如果当前没有选中的发送端口，且有打开的端口，则选中第一个
         const firstOpen = json.data.find((p: PortInfo) => p.status === 'open');
         if (firstOpen && !sendPath) {
           setSendPath(firstOpen.path);
@@ -176,6 +175,13 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [debugMode, setDebugMode] = useState(true); // 默认开启调试模式
+
+  // 切换视图模式时自动刷新设备列表
+  useEffect(() => {
+    fetchPorts(true).then(() => {
+      Message.success(t('msg.viewChanged'));
+    });
+  }, [viewMode]);
 
   useEffect(() => {
     // 初始加载列表
@@ -328,11 +334,11 @@ export default function App() {
       if (json.code === 0) {
         Message.success(t('msg.openSuccess'));
         setVisible(false);
+        setSendPath(values.path);
         fetchPorts(true);
 
         // 自动发送逻辑
         if (autoSend.enabled && autoSend.content) {
-          console.log('Triggering Auto-Send...');
           try {
             await fetch('http://localhost:3001/api/ports/write', {
               method: 'POST',
@@ -466,6 +472,32 @@ export default function App() {
     return t('menu.dashboard');
   };
 
+  const menuRoutes = [
+    {
+      name: t('menu.dashboard'),
+      key: '1',
+      icon: <IconDashboard />,
+      children: [
+        { name: t('menu.workplace'), key: '1-1' },
+        { name: t('menu.monitor'), key: '1-2' }
+      ]
+    },
+    {
+      name: t('menu.visualization'),
+      key: '2',
+      icon: <IconApps />,
+      children: [
+        { name: 'Analysis', key: '2-1' },
+        { name: 'Multi-Dimension', key: '2-2' }
+      ]
+    },
+    {
+      name: t('menu.settings'),
+      key: '3',
+      icon: <IconSettings />
+    }
+  ];
+
   const renderPortGrid = () => (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', paddingRight: 4 }}>
       <Grid.Row gutter={[16, 16]}>
@@ -533,35 +565,81 @@ export default function App() {
       </style>
       <Layout style={{ height: '100vh', background: '#f4f5f7' }}>
         <Sider
+          width={240}
           collapsed={collapsed}
           onCollapse={setCollapsed}
           collapsible
-          trigger={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+          trigger={null}
           breakpoint="xl"
           style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)' }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <div style={{ height: 64, background: '#fff', borderBottom: '1px solid #e5e6eb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
+            <div style={{ height: 64, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
               <Space>
                 <div style={{ width: 32, height: 32, background: 'url(//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/dfdba5317c0c20ce20e64fac803d52bc.svg~tplv-49unhts6dw-image.image) no-repeat center/contain' }}></div>
                 {!collapsed && <span>SerialPort</span>}
               </Space>
             </div>
-            <Menu defaultSelectedKeys={['1-1']} defaultOpenKeys={['1']} selectedKeys={[currentMenu]} onClickMenuItem={setCurrentMenu} style={{ flex: 1, overflowY: 'auto' }}>
-              <Menu.SubMenu key="1" title={<span><IconDashboard /> {t('menu.dashboard')}</span>}>
-                <Menu.Item key="1-1">{t('menu.workplace')}</Menu.Item>
-                <Menu.Item key="1-2">{t('menu.monitor')}</Menu.Item>
-              </Menu.SubMenu>
-              <Menu.SubMenu key="2" title={<span><IconApps /> {t('menu.visualization')}</span>}>
-                <Menu.Item key="2-1">Analysis</Menu.Item>
-                <Menu.Item key="2-2">Multi-Dimension</Menu.Item>
-              </Menu.SubMenu>
-              <Menu.Item key="3"><IconSettings /> {t('menu.settings')}</Menu.Item>
+            <Menu
+              style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}
+              selectedKeys={[currentMenu]}
+              onClickMenuItem={(key) => setCurrentMenu(key)}
+              collapse={collapsed}
+              autoOpen
+              hasCollapseButton={false}
+            >
+              {menuRoutes.map((route) => {
+                if (route.children) {
+                  return (
+                    <SubMenu
+                      key={route.key}
+                      title={
+                        <span>
+                          {route.icon}
+                          <span style={{ marginLeft: 10 }}>{route.name}</span>
+                        </span>
+                      }
+                    >
+                      {route.children.map((child) => (
+                        <MenuItem key={child.key}>{child.name}</MenuItem>
+                      ))}
+                    </SubMenu>
+                  );
+                }
+                return (
+                  <MenuItem key={route.key}>
+                    {route.icon}
+                    <span style={{ marginLeft: 10 }}>{route.name}</span>
+                  </MenuItem>
+                );
+              })}
             </Menu>
+            <div
+              style={{
+                height: 48,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: collapsed ? 'center' : 'flex-end',
+                padding: collapsed ? 0 : '0 12px',
+              }}
+            >
+              <Button
+                type="text"
+                size="small"
+                onClick={() => setCollapsed(!collapsed)}
+                icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+                style={{
+                  color: 'var(--color-text-2)',
+                  fontSize: 16,
+                  width: 28,
+                  height: 28,
+                }}
+              />
+            </div>
           </div>
         </Sider>
         <Layout>
-          <Header style={{ height: '64px', padding: '0 20px', background: '#fff', borderBottom: '1px solid #e5e6eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
               <Breadcrumb>
                 <Breadcrumb.Item>{t('menu.workspace')}</Breadcrumb.Item>
@@ -666,7 +744,7 @@ export default function App() {
                         bordered={false}
                         bodyStyle={{ height: 468, overflow: 'hidden' }}
                         extra={
-                          <Space>
+                          <Space align="center">
                             <Radio.Group type="button" value={viewMode} onChange={setViewMode} size="small">
                               <Radio value="list">
                                 <Tooltip content={t('tooltip.listView')}>
@@ -680,12 +758,16 @@ export default function App() {
                               </Radio>
                             </Radio.Group>
                             <Tooltip content={t('tooltip.refreshPorts')}>
-                              <Button icon={<IconRefresh />} type="text" onClick={() => fetchPorts(false)} loading={loading} />
+                              <Button size="small" icon={<IconRefresh />} type="text" onClick={() => fetchPorts(false)} loading={loading} />
                             </Tooltip>
                           </Space>
                         }
                       >
-                        {viewMode === 'list' ? (
+                        {ports.length === 0 && !loading ? (
+                          <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', height: '100%', flexDirection: 'column', paddingTop: 80 }}>
+                            <Empty description={t('common.noData')} />
+                          </div>
+                        ) : viewMode === 'list' ? (
                           <div style={{ height: '100%', overflow: 'hidden' }}>
                             <Table
                               rowKey="path"
@@ -695,6 +777,7 @@ export default function App() {
                               pagination={false}
                               border={false}
                               scroll={{ y: 400 }}
+                              noDataElement={null}
                             />
                           </div>
                         ) : (

@@ -4,6 +4,13 @@ import react from '@astrojs/react';
 // https://astro.build/config
 export default defineConfig({
   integrations: [react()],
+  vite: {
+    resolve: {
+      alias: {
+        '~nprogress': 'nprogress',
+      }
+    }
+  },
   server: {
     port: 3000,
     proxy: {

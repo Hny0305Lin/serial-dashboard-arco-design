@@ -33,6 +33,7 @@ export default function Settings({
   onSendEncodingChange
 }: SettingsProps) {
   const { t } = useTranslation();
+  // 创建表单实例
   const [form] = Form.useForm();
   const [filterForm] = Form.useForm();
 
@@ -82,12 +83,12 @@ export default function Settings({
           >
             <Radio value="hex">
               <Tooltip content={t('tooltip.dataFormat')}>
-                <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>{t('text.hex')}</div>
+                {t('text.hex')}
               </Tooltip>
             </Radio>
             <Radio value="utf8">
               <Tooltip content={t('tooltip.dataFormat')}>
-                <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>{t('text.text')}</div>
+                {t('text.text')}
               </Tooltip>
             </Radio>
           </Radio.Group>
@@ -105,9 +106,7 @@ export default function Settings({
       >
         <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
         <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: serialFilter.enabled ? 24 : 0 }}>
-          <Tooltip content={t('tooltip.deviceFilterEnable')}>
-            <Switch />
-          </Tooltip>
+          <Switch />
         </Form.Item>
 
         {serialFilter.enabled && (
@@ -144,9 +143,7 @@ export default function Settings({
         <Divider orientation="left">{t('settings.autoSend.title')}</Divider>
 
         <Form.Item label={t('settings.autoSend.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: autoSendConfig.enabled ? 24 : 0 }}>
-          <Tooltip content={t('tooltip.autoSendEnable')}>
-            <Switch />
-          </Tooltip>
+          <Switch />
         </Form.Item>
 
         {autoSendConfig.enabled && (
@@ -155,12 +152,12 @@ export default function Settings({
               <Radio.Group type="button">
                 <Radio value="hex">
                   <Tooltip content={t('tooltip.autoSendFormat')}>
-                    <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>{t('text.hex')}</div>
+                    {t('text.hex')}
                   </Tooltip>
                 </Radio>
                 <Radio value="utf8">
                   <Tooltip content={t('tooltip.autoSendFormat')}>
-                    <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>{t('text.text')}</div>
+                    {t('text.text')}
                   </Tooltip>
                 </Radio>
               </Radio.Group>
