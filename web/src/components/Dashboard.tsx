@@ -2,47 +2,43 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Layout,
   Breadcrumb,
-  Card,
   Space,
   Button,
-  Table,
-  Tag,
   Modal,
   Form,
   Input,
   Select,
   Message,
   Typography,
-  Radio,
   Grid,
-  Statistic,
   Avatar,
-  Badge,
-  Divider,
-  Tooltip,
-  Empty,
   Menu
 } from '@arco-design/web-react';
 import {
   IconDashboard,
   IconSettings,
-  IconRefresh,
-  IconSend,
-  IconDelete,
   IconLanguage,
   IconApps,
-  IconThunderbolt,
-  IconCode,
   IconUser,
   IconMenuFold,
-  IconMenuUnfold,
-  IconList
+  IconMenuUnfold
 } from '@arco-design/web-react/icon';
+import {
+  HashRouter as Router,
+  Switch,
+  Route,
+  useHistory,
+  useLocation
+} from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import '../i18n';
 import '@arco-design/web-react/dist/css/arco.css';
 import Settings from './Settings';
 import type { SerialFilterConfig } from './Settings';
+import DashboardHome from './DashboardHome';
+import type { PortInfo } from '../types';
+
+import LogSavePage from './LogSavePage';
 
 const { Sider, Header, Content, Footer } = Layout;
 const { Option } = Select;
@@ -51,23 +47,17 @@ const SubMenu = Menu.SubMenu;
 const FormItem = Form.Item;
 const { Row, Col } = Grid;
 
-interface PortInfo {
-  path: string;
-  manufacturer?: string;
-  status: 'closed' | 'opening' | 'open' | 'error' | 'reconnecting';
-  pnpId?: string;
-  vendorId?: string;
-  productId?: string;
-}
-
 interface AutoSendConfig {
   enabled: boolean;
   content: string;
   encoding: 'hex' | 'utf8';
 }
 
-export default function App() {
+function AppContent() {
   const { t, i18n } = useTranslation();
+  const history = useHistory();
+  const location = useLocation();
+
   const [collapsed, setCollapsed] = useState(false);
   const [currentMenu, setCurrentMenu] = useState('1-1');
   const [allPorts, setAllPorts] = useState<PortInfo[]>([]); // 原始端口数据
@@ -93,6 +83,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('sendEncoding', sendEncoding);
   }, [sendEncoding]);
+
+  // Sync menu selection with URL
+  useEffect(() => {
+    const path = location.pathname;
+    if (path === '/settings') {
+      setCurrentMenu('3');
+    } else if (path === '/monitor') {
+      setCurrentMenu('1-2');
+    } else {
+      setCurrentMenu('1-1');
+    }
+  }, [location]);
 
   // 设备适配过滤器
   const [serialFilter, setSerialFilter] = useState<SerialFilterConfig>(() => {
@@ -421,55 +423,22 @@ export default function App() {
     i18n.changeLanguage(next);
   };
 
-  const columns = [
-    {
-      title: t('port.path'),
-      dataIndex: 'path',
-      render: (text: string) => <Typography.Text bold>{text}</Typography.Text>
-    },
-    {
-      title: t('port.status'),
-      dataIndex: 'status',
-      render: (status: string) => {
-        const statusMap: Record<string, { status: "success" | "error" | "processing" | "default" | "warning", text: string }> = {
-          open: { status: 'success', text: t('status.open') },
-          error: { status: 'error', text: t('status.error') },
-          opening: { status: 'processing', text: t('status.opening') },
-          closed: { status: 'default', text: t('status.closed') },
-          reconnecting: { status: 'warning', text: 'Reconnecting' }
-        };
-        const conf = statusMap[status] || statusMap.closed;
-        return <Badge status={conf.status} text={conf.text} />;
-      },
-    },
-    {
-      title: t('port.action'),
-      render: (_: any, record: PortInfo) => (
-        <Space>
-          {record.status === 'open' ? (
-            <Button type="text" status="danger" size="small" onClick={() => handleClose(record.path)}>
-              {t('common.close')}
-            </Button>
-          ) : (
-            <Button type="text" size="small" onClick={() => {
-              form.setFieldValue('path', record.path);
-              setVisible(true);
-            }}>
-              {t('common.open')}
-            </Button>
-          )}
-        </Space>
-      ),
-    },
-  ];
-
   const openPorts = ports.filter(p => p.status === 'open');
 
   const getBreadcrumb = () => {
-    if (currentMenu === '3') return t('menu.settings');
-    if (currentMenu === '1-1') return t('menu.workplace');
-    if (currentMenu === '1-2') return t('menu.monitor');
-    return t('menu.dashboard');
+    if (location.pathname === '/save-logs') {
+      return (
+        [
+          <Breadcrumb.Item key="workplace">{t('menu.workplace')}</Breadcrumb.Item>,
+          <Breadcrumb.Item key="save-logs">{t('page.logSave')}</Breadcrumb.Item>
+        ]
+      );
+    }
+
+    if (currentMenu === '3') return <Breadcrumb.Item>{t('menu.settings')}</Breadcrumb.Item>;
+    if (currentMenu === '1-1') return <Breadcrumb.Item>{t('menu.workplace')}</Breadcrumb.Item>;
+    if (currentMenu === '1-2') return <Breadcrumb.Item>{t('menu.monitor')}</Breadcrumb.Item>;
+    return <Breadcrumb.Item>{t('menu.dashboard')}</Breadcrumb.Item>;
   };
 
   const menuRoutes = [
@@ -497,58 +466,6 @@ export default function App() {
       icon: <IconSettings />
     }
   ];
-
-  const renderPortGrid = () => (
-    <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', paddingRight: 4 }}>
-      <Grid.Row gutter={[16, 16]}>
-        {ports.map((port) => (
-          <Grid.Col span={8} key={port.path}>
-            <Card
-              hoverable
-              style={{ marginBottom: 0 }}
-              actions={[
-                port.status === 'open' ? (
-                  <Button type="text" status="danger" size="small" onClick={() => handleClose(port.path)}>
-                    {t('common.close')}
-                  </Button>
-                ) : (
-                  <Button type="text" size="small" onClick={() => {
-                    form.setFieldValue('path', port.path);
-                    setVisible(true);
-                  }}>
-                    {t('common.open')}
-                  </Button>
-                )
-              ]}
-            >
-              <Card.Meta
-                avatar={
-                  <Avatar
-                    size={48}
-                    shape="square"
-                    style={{ backgroundColor: port.status === 'open' ? '#0fbf60' : '#86909c' }}
-                  >
-                    <IconThunderbolt />
-                  </Avatar>
-                }
-                title={
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography.Text bold>{port.path}</Typography.Text>
-                    <Badge status={port.status === 'open' ? 'success' : 'default'} text={port.status === 'open' ? t('status.open') : t('status.closed')} />
-                  </div>
-                }
-                description={
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {port.manufacturer || 'Unknown Manufacturer'}
-                  </Typography.Text>
-                }
-              />
-            </Card>
-          </Grid.Col>
-        ))}
-      </Grid.Row>
-    </div>
-  );
 
   return (
     <>
@@ -583,7 +500,12 @@ export default function App() {
             <Menu
               style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}
               selectedKeys={[currentMenu]}
-              onClickMenuItem={(key) => setCurrentMenu(key)}
+              onClickMenuItem={(key) => {
+                if (key === '1-1') history.push('/');
+                if (key === '1-2') history.push('/monitor');
+                if (key === '3') history.push('/settings');
+                setCurrentMenu(key);
+              }}
               collapse={collapsed}
               autoOpen
               hasCollapseButton={false}
@@ -633,6 +555,7 @@ export default function App() {
                   fontSize: 16,
                   width: 28,
                   height: 28,
+                  marginTop: 10,
                 }}
               />
             </div>
@@ -641,9 +564,9 @@ export default function App() {
         <Layout>
           <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space>
-              <Breadcrumb>
+              <Breadcrumb separator={<svg fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 48 48" aria-hidden="true" focusable="false" className="arco-icon arco-icon-oblique-line"><path d="M29.506 6.502 18.493 41.498"></path></svg>}>
                 <Breadcrumb.Item>{t('menu.workspace')}</Breadcrumb.Item>
-                <Breadcrumb.Item>{getBreadcrumb()}</Breadcrumb.Item>
+                {getBreadcrumb()}
               </Breadcrumb>
             </Space>
             <Space size="medium">
@@ -653,255 +576,54 @@ export default function App() {
           </Header>
 
           <Content style={{ padding: '16px 24px' }}>
-            {currentMenu === '3' ? (
-              <Settings
-                autoSendConfig={autoSend}
-                onAutoSendConfigChange={setAutoSend}
-                serialFilter={serialFilter}
-                onSerialFilterChange={setSerialFilter}
-                sendEncoding={sendEncoding}
-                onSendEncodingChange={setSendEncoding}
-              />
-            ) : currentMenu === '1-2' ? (
-              <div style={{ textAlign: 'center', marginTop: 100 }}>
-                <Typography.Title heading={3}>{t('menu.monitor')}</Typography.Title>
-                <Typography.Text>Coming Soon...</Typography.Text>
-              </div>
-            ) : (
-              <>
-                {/* Welcome Header */}
-                <div style={{ background: '#fff', padding: '16px 20px 0 20px', marginBottom: 16, borderRadius: 4 }}>
-                  <Typography.Title heading={5} style={{ marginTop: 0, marginBottom: 16 }}>
-                    {t('header.welcome')}
-                  </Typography.Title>
-
-                  <Divider style={{ margin: '16px 0' }} />
-
-                  <Grid.Row gutter={16} style={{ paddingBottom: 16 }}>
-                    <Grid.Col span={6}>
-                      <Space align="center">
-                        <Avatar size={54} style={{ backgroundColor: '#e8f3ff' }}>
-                          <img alt="total-ports" src="/icons/total-ports.svg" />
-                        </Avatar>
-                        <Statistic
-                          title={t('stat.totalPorts')}
-                          value={totalPortsCount}
-                          style={{ marginLeft: 16 }}
-                          styleValue={{ fontWeight: 'bold' }}
-                        />
-                      </Space>
-                    </Grid.Col>
-                    <Grid.Col span={6}>
-                      <Space align="center">
-                        <Avatar size={54} style={{ backgroundColor: '#e8ffea' }}>
-                          <img alt="active-connections" src="/icons/active-connections.svg" />
-                        </Avatar>
-                        <Statistic
-                          title={t('stat.activeConnections')}
-                          value={activePortsCount}
-                          style={{ marginLeft: 16 }}
-                          styleValue={{ fontWeight: 'bold' }}
-                        />
-                      </Space>
-                    </Grid.Col>
-                    <Grid.Col span={6}>
-                      <Space align="center">
-                        <Avatar size={54} style={{ backgroundColor: '#e8f3ff' }}>
-                          <img alt="rx-packets" src="/icons/rx-packets.svg" />
-                        </Avatar>
-                        <Statistic
-                          title={t('stat.rxPackets')}
-                          value={rxCount}
-                          style={{ marginLeft: 16 }}
-                          styleValue={{ fontWeight: 'bold' }}
-                        />
-                      </Space>
-                    </Grid.Col>
-                    <Grid.Col span={6}>
-                      <Space align="center">
-                        <Avatar size={54} style={{ backgroundColor: '#fff7e8' }}>
-                          <img alt="tx-packets" src="/icons/tx-packets.svg" />
-                        </Avatar>
-                        <Statistic
-                          title={t('stat.txPackets')}
-                          value={txCount}
-                          style={{ marginLeft: 16 }}
-                          styleValue={{ fontWeight: 'bold' }}
-                        />
-                      </Space>
-                    </Grid.Col>
-                  </Grid.Row>
+            <Switch>
+              <Route path="/settings">
+                <Settings
+                  autoSendConfig={autoSend}
+                  onAutoSendConfigChange={setAutoSend}
+                  serialFilter={serialFilter}
+                  onSerialFilterChange={setSerialFilter}
+                  sendEncoding={sendEncoding}
+                  onSendEncodingChange={setSendEncoding}
+                />
+              </Route>
+              <Route path="/monitor">
+                <div style={{ textAlign: 'center', marginTop: 100 }}>
+                  <Typography.Title heading={3}>{t('menu.monitor')}</Typography.Title>
+                  <Typography.Text>Coming Soon...</Typography.Text>
                 </div>
-
-                <Grid.Row gutter={16}>
-                  {/* Left Column */}
-                  <Grid.Col span={16}>
-                    <Space direction="vertical" size="medium" style={{ width: '100%' }}>
-
-                      {/* Port List */}
-                      <Card
-                        title={<Space><IconThunderbolt /> {t('panel.device')}</Space>}
-                        bordered={false}
-                        bodyStyle={{ height: 468, overflow: 'hidden' }}
-                        extra={
-                          <Space align="center">
-                            <Radio.Group type="button" value={viewMode} onChange={setViewMode} size="small">
-                              <Radio value="list">
-                                <Tooltip content={t('tooltip.listView')}>
-                                  <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconList /></div>
-                                </Tooltip>
-                              </Radio>
-                              <Radio value="grid">
-                                <Tooltip content={t('tooltip.gridView')}>
-                                  <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconApps /></div>
-                                </Tooltip>
-                              </Radio>
-                            </Radio.Group>
-                            <Tooltip content={t('tooltip.refreshPorts')}>
-                              <Button size="small" icon={<IconRefresh />} type="text" onClick={() => fetchPorts(false)} loading={loading} />
-                            </Tooltip>
-                          </Space>
-                        }
-                      >
-                        {ports.length === 0 && !loading ? (
-                          <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', height: '100%', flexDirection: 'column', paddingTop: 80 }}>
-                            <Empty description={t('common.noData')} />
-                          </div>
-                        ) : viewMode === 'list' ? (
-                          <div style={{ height: '100%', overflow: 'hidden' }}>
-                            <Table
-                              rowKey="path"
-                              loading={loading}
-                              columns={columns}
-                              data={ports}
-                              pagination={false}
-                              border={false}
-                              scroll={{ y: 400 }}
-                              noDataElement={null}
-                            />
-                          </div>
-                        ) : (
-                          renderPortGrid()
-                        )}
-                      </Card>
-
-                      {/* Terminal / Logs */}
-                      <Card
-                        title={<Space><IconCode /> {t('panel.terminal')}</Space>}
-                        bordered={false}
-                        extra={
-                          <Tooltip content={t('tooltip.clearLogs')}>
-                            <Button size="small" type="text" icon={<IconDelete />} onClick={() => setLogs([])} />
-                          </Tooltip>
-                        }
-                      >
-                        <div className="no-scrollbar" style={{
-                          height: 400,
-                          background: '#1e1e1e',
-                          borderRadius: 4,
-                          padding: 12,
-                          overflowY: 'auto',
-                          fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                          fontSize: 13,
-                          color: '#d4d4d4'
-                        }}>
-                          {logs.length === 0 && <Empty description={t('panel.noLogs')} />}
-                          {logs.map((log, idx) => (
-                            <div key={idx} style={{ marginBottom: 4, lineHeight: '1.4', display: 'flex' }}>
-                              <div style={{ width: 24, flexShrink: 0, textAlign: 'center' }}>
-                                {log.includes('-TX]') && <span style={{ color: '#569cd6' }}>➜</span>}
-                                {log.includes('-RX]') && <span style={{ color: '#4ec9b0' }}>➜</span>}
-                                {log.includes('-Auto]') && <span style={{ color: '#d7ba7d' }}>#</span>}
-                                {(log.includes('-Status]') || log.startsWith('[Status]')) && <span style={{ color: '#ce9178' }}>ℹ</span>}
-                                {log.startsWith('[System]') && <span style={{ color: '#6a9955' }}>#</span>}
-                              </div>
-                              <div style={{ flex: 1, wordBreak: 'break-all' }}>
-                                {/* 简单的文本处理，提取标签和内容 */}
-                                {(() => {
-                                  // 匹配 [Tag] Content 格式
-                                  // Tag 可以是 [COM1-TX], [System], [Status] 等
-                                  // 即使内容为空，也能匹配到，确保空内容的日志也能正确显示标签
-                                  const match = log.match(/^(\[[^\]]+\])\s*(.*)$/);
-                                  if (match) {
-                                    return (
-                                      <div style={{ display: 'flex' }}>
-                                        {/* 增加 minWidth 到 120 以容纳更长的 [COM10-TX] */}
-                                        <span style={{
-                                          marginRight: 8,
-                                          opacity: 0.8,
-                                          fontFamily: 'Consolas, monospace',
-                                          flexShrink: 0, // 防止标签被压缩
-                                          color: 'inherit' // 强制继承父级颜色，防止被其他样式覆盖
-                                        }}>
-                                          {match[1]}
-                                        </span>
-                                        <span style={{ flex: 1, whiteSpace: 'pre-wrap' }}>{match[2]}</span>
-                                      </div>
-                                    );
-                                  }
-                                  return log;
-                                })()}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </Card>
-                    </Space>
-                  </Grid.Col>
-
-                  {/* Right Column */}
-                  <Grid.Col span={8}>
-                    <Card title={t('panel.control')} bordered={false}>
-                      <Form layout="vertical">
-                        <Form.Item label={t('control.targetPort')}>
-                          <Select
-                            placeholder={t('control.targetPort')}
-                            value={sendPath}
-                            onChange={setSendPath}
-                            disabled={openPorts.length === 0}
-                          >
-                            {openPorts.map(p => <Option key={p.path} value={p.path}>{p.path}</Option>)}
-                          </Select>
-                        </Form.Item>
-
-                        <Form.Item label={t('control.content')}>
-                          <Tooltip
-                            content={t('tooltip.sendContent')}
-                            trigger="focus"
-                            position="top"
-                          >
-                            <Input.TextArea
-                              rows={6}
-                              placeholder={t('control.placeholder')}
-                              value={sendContent}
-                              onChange={setSendContent}
-                              onPressEnter={(e) => {
-                                if (!e.shiftKey) {
-                                  e.preventDefault();
-                                  handleSend();
-                                }
-                              }}
-                            />
-                          </Tooltip>
-                        </Form.Item>
-
-                        <Tooltip content={t('tooltip.sendPayload')}>
-                          <Button type="primary" long icon={<IconSend />} loading={sending} onClick={handleSend} size="large">
-                            {t('control.sendPayload')}
-                          </Button>
-                        </Tooltip>
-                      </Form>
-                    </Card>
-
-                    <Card title={t('panel.quickInfo')} bordered={false} style={{ marginTop: 16 }}>
-                      <Typography.Text type="secondary">
-                        <span dangerouslySetInnerHTML={{ __html: t('panel.quickInfoContent') }} />
-                      </Typography.Text>
-                    </Card>
-                  </Grid.Col>
-                </Grid.Row>
-              </>
-            )}
+              </Route>
+              <Route path="/save-logs">
+                <LogSavePage currentLogs={logs} />
+              </Route>
+              <Route path="/">
+                <DashboardHome
+                  totalPortsCount={totalPortsCount}
+                  activePortsCount={activePortsCount}
+                  rxCount={rxCount}
+                  txCount={txCount}
+                  ports={ports}
+                  loading={loading}
+                  viewMode={viewMode}
+                  setViewMode={setViewMode}
+                  fetchPorts={fetchPorts}
+                  handleClose={handleClose}
+                  onOpenClick={(port) => {
+                    form.setFieldValue('path', port.path);
+                    setVisible(true);
+                  }}
+                  logs={logs}
+                  setLogs={setLogs}
+                  sendPath={sendPath}
+                  setSendPath={setSendPath}
+                  openPorts={openPorts}
+                  sendContent={sendContent}
+                  setSendContent={setSendContent}
+                  handleSend={handleSend}
+                  sending={sending}
+                />
+              </Route>
+            </Switch>
           </Content>
           <Footer style={{ textAlign: 'center', color: '#86909c', padding: '16px 0' }}>
             {t('footer.copyright')}
@@ -909,7 +631,7 @@ export default function App() {
         </Layout>
 
         <Modal
-          title={t('modal.openPort')}
+          title={t('modal.openPortWith', { port: form.getFieldValue('path') || '...' })}
           visible={visible}
           onOk={handleOpen}
           onCancel={() => setVisible(false)}
@@ -924,10 +646,12 @@ export default function App() {
               <Col span={12}>
                 <FormItem label={t('port.baudRate')} field="baudRate" rules={[{ required: true }]}>
                   <Select>
-                    <Option value={9600}>9600</Option>
                     <Option value={115200}>115200</Option>
+                    <Option value={921600}>921600</Option>
+                    <Option value={9600}>9600</Option>
+                    <Option value={19200}>19200</Option>
                     <Option value={38400}>38400</Option>
-                    <Option value={4800}>4800</Option>
+                    <Option value={57600}>57600</Option>
                   </Select>
                 </FormItem>
               </Col>
@@ -964,5 +688,13 @@ export default function App() {
         </Modal>
       </Layout>
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <Router>
+      <AppContent />
+    </Router>
   );
 }
