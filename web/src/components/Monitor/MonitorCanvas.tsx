@@ -604,13 +604,34 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleRemoveWidget = (id: string) => {
+    const target = widgets.find(w => w.id === id) || null;
     Modal.confirm({
       title: t('monitor.deleteConfirm.title'),
       content: t('monitor.deleteConfirm.content'),
-      onOk: () => {
+      onOk: async () => {
+        if (target?.type === 'terminal' && target.portPath) {
+          const key = normalizePath(target.portPath);
+          const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === key && p.status === 'open');
+          const shouldClose = !!target.isConnected || isOpenOnServer;
+          if (shouldClose) {
+            try {
+              Message.info('正在断开...');
+              await serial.closePort(target.portPath);
+              await syncConnectionsFromServer();
+              Message.success(`${target.portPath} 已断开`);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              Message.error(msg || '断开失败');
+              throw e;
+            }
+          }
+        }
         setRemovingIds(prev => ({ ...prev, [id]: true }));
         window.setTimeout(() => {
           setWidgets(prev => prev.filter(w => w.id !== id));
+          if (editingWidget?.id === id) {
+            setEditingWidget(null);
+          }
           setRemovingIds(prev => {
             const next = { ...prev };
             delete next[id];
