@@ -54,7 +54,7 @@ export default function TerminalWidget(props: {
         display: 'flex',
         flexDirection: 'column',
         opacity: removing ? 0 : appearing ? 0 : 1,
-        transform: `translate3d(${widget.x + canvasState.offsetX}px, ${widget.y + canvasState.offsetY}px, 0) scale(${(removing || appearing) ? 0.98 : 1})`,
+        transform: `translate3d(${widget.x}px, ${widget.y}px, 0) scale(${(removing || appearing) ? 0.98 : 1})`,
         transition: (draggedWidgetId === widget.id || resizingWidgetId === widget.id || isDragging) ? 'none' : 'opacity 160ms ease, transform 160ms ease, box-shadow 0.2s',
       }}
       onMouseDown={(e) => onMouseDown(e, widget.id)}
@@ -74,15 +74,17 @@ export default function TerminalWidget(props: {
           <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
           <Tooltip content={widget.portPath || t('monitor.noPort')}>
             <div
-              style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline' }}
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenConfig(widget);
               }}
             >
-              <Typography.Text bold>{widget.title}</Typography.Text>
+              <Typography.Text bold style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {widget.title}
+              </Typography.Text>
               {widget.showSubtitle && widget.subtitle && (
-                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {widget.subtitle}
                 </Typography.Text>
               )}
@@ -121,7 +123,7 @@ export default function TerminalWidget(props: {
         </Button.Group>
       </div>
 
-      <div style={{ flex: 1, padding: 12, overflow: 'hidden', position: 'relative' }}>
+      <div style={{ flex: 1, padding: 0, overflow: 'hidden', position: 'relative' }}>
         <TerminalLogView logs={widget.logs || []} emptyText={t('panel.noLogs')} height="100%" />
       </div>
 

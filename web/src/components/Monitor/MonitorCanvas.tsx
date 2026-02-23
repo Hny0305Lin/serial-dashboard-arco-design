@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { IconPlus, IconCode, IconDownload } from '@arco-design/web-react/icon';
+import { createPortal } from 'react-dom';
+import { IconPlus, IconCode, IconDownload, IconMinus, IconSync } from '@arco-design/web-react/icon';
 import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
@@ -388,6 +389,65 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   }, [ws]); // 移除 widgets 依赖，避免频繁重绑监听器
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const floatingActionsRef = useRef<HTMLDivElement>(null);
+  const floatingActionsRafRef = useRef<number | null>(null);
+  const [floatingActionsPos, setFloatingActionsPos] = useState<{ top: number; right: number } | null>(null);
+  const [floatingZoomPos, setFloatingZoomPos] = useState<{ bottom: number; right: number } | null>(null);
+  const canUseDom = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+  const updateFloatingActionsPos = useCallback(() => {
+    if (!canUseDom) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const top = Math.round(rect.top + 20);
+    const right = Math.round(window.innerWidth - rect.right + 20);
+    const bottom = Math.round(window.innerHeight - rect.bottom + 20);
+    setFloatingActionsPos((prev) => {
+      if (prev && Math.abs(prev.top - top) < 1 && Math.abs(prev.right - right) < 1) return prev;
+      return { top, right };
+    });
+    setFloatingZoomPos((prev) => {
+      if (prev && Math.abs(prev.bottom - bottom) < 1 && Math.abs(prev.right - right) < 1) return prev;
+      return { bottom, right };
+    });
+  }, [canUseDom]);
+
+  useEffect(() => {
+    if (!canUseDom) return;
+    updateFloatingActionsPos();
+    const onUpdate = () => {
+      if (floatingActionsRafRef.current) return;
+      floatingActionsRafRef.current = window.requestAnimationFrame(() => {
+        floatingActionsRafRef.current = null;
+        updateFloatingActionsPos();
+      });
+    };
+    window.addEventListener('resize', onUpdate);
+    window.addEventListener('scroll', onUpdate, true);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      ro = new ResizeObserver(onUpdate);
+      ro.observe(containerRef.current);
+    }
+    return () => {
+      window.removeEventListener('resize', onUpdate);
+      window.removeEventListener('scroll', onUpdate, true);
+      if (floatingActionsRafRef.current) {
+        window.cancelAnimationFrame(floatingActionsRafRef.current);
+        floatingActionsRafRef.current = null;
+      }
+      if (ro) ro.disconnect();
+    };
+  }, [canUseDom, updateFloatingActionsPos]);
+
+  useEffect(() => {
+    if (!canUseDom) return;
+    updateFloatingActionsPos();
+    window.setTimeout(() => {
+      updateFloatingActionsPos();
+    }, 0);
+  }, [canUseDom, widgets.length, updateFloatingActionsPos]);
 
   const [editingWidget, setEditingWidget] = useState<MonitorWidget | null>(null);
   const [appearingIds, setAppearingIds] = useState<Record<string, true>>({});
@@ -465,10 +525,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       // 修正中心点计算：
       // 我们希望新组件出现在视口中心。
       // 视口中心点 Vcx = viewportW / 2, Vcy = viewportH / 2
-      // 对应的画布坐标 Ccx = Vcx - offsetX, Ccy = Vcy - offsetY
+      // 当前映射：screen = world * scale + offset
+      // 对应世界坐标中心 Ccx = (Vcx - offsetX) / scale, Ccy = (Vcy - offsetY) / scale
       // 组件左上角坐标 = Ccx - W/2, Ccy - H/2
-      const centerX = (viewportW / 2) - canvasState.offsetX - (W / 2);
-      const centerY = (viewportH / 2) - canvasState.offsetY - (H / 2);
+      const scale = canvasState.scale || 1;
+      const centerX = ((viewportW / 2) - canvasState.offsetX) / scale - (W / 2);
+      const centerY = ((viewportH / 2) - canvasState.offsetY) / scale - (H / 2);
 
       let bestX = centerX;
       let bestY = centerY;
@@ -605,41 +667,50 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const handleRemoveWidget = (id: string) => {
     const target = widgets.find(w => w.id === id) || null;
+    const name = (target?.title || '').trim() || getDefaultWidgetName(target?.type);
     Modal.confirm({
-      title: t('monitor.deleteConfirm.title'),
+      title: `删除${name}组件`,
       content: t('monitor.deleteConfirm.content'),
-      onOk: async () => {
-        if (target?.type === 'terminal' && target.portPath) {
-          const key = normalizePath(target.portPath);
-          const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === key && p.status === 'open');
-          const shouldClose = !!target.isConnected || isOpenOnServer;
-          if (shouldClose) {
-            try {
-              Message.info('正在断开...');
-              await serial.closePort(target.portPath);
-              await syncConnectionsFromServer();
-              Message.success(`${target.portPath} 已断开`);
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e);
-              Message.error(msg || '断开失败');
-              throw e;
+      okButtonProps: { type: 'primary' },
+      onOk: () => {
+        const delay = new Promise<void>((resolve) => window.setTimeout(resolve, 800));
+        const work = (async () => {
+          if (target?.type === 'terminal' && target.portPath) {
+            const key = normalizePath(target.portPath);
+            const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === key && p.status === 'open');
+            const shouldClose = !!target.isConnected || isOpenOnServer;
+            if (shouldClose) {
+              try {
+                Message.info('正在断开...');
+                await serial.closePort(target.portPath);
+                await syncConnectionsFromServer();
+                Message.success(`${target.portPath} 已断开`);
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                Message.error(msg || '断开失败');
+                throw e;
+              }
             }
           }
-        }
-        setRemovingIds(prev => ({ ...prev, [id]: true }));
-        window.setTimeout(() => {
-          setWidgets(prev => prev.filter(w => w.id !== id));
-          if (editingWidget?.id === id) {
-            setEditingWidget(null);
-          }
-          setRemovingIds(prev => {
-            const next = { ...prev };
-            delete next[id];
-            return next;
-          });
-          Message.success(t('monitor.deleteSuccess'));
-        }, 180);
-      }
+          setRemovingIds(prev => ({ ...prev, [id]: true }));
+          window.setTimeout(() => {
+            setWidgets(prev => prev.filter(w => w.id !== id));
+            if (editingWidget?.id === id) {
+              setEditingWidget(null);
+            }
+            setRemovingIds(prev => {
+              const next = { ...prev };
+              delete next[id];
+              return next;
+            });
+            Message.success(t('monitor.deleteSuccess'));
+          }, 180);
+        })();
+        return Promise.all([work, delay]).then(() => undefined).catch(async (e) => {
+          await delay;
+          throw e;
+        });
+      },
     });
   };
 
@@ -740,6 +811,75 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   // 使用 requestAnimationFrame 优化缩放和拖拽
   const rafRef = useRef<number>();
+  const MIN_TERMINAL_WIDTH = 360;
+  const MAX_TERMINAL_WIDTH: number | null = null;
+  const ZOOM_STEPS = [0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+  const MIN_CANVAS_SCALE = ZOOM_STEPS[0];
+  const MAX_CANVAS_SCALE = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+  const clampScale = (s: number) => Math.min(MAX_CANVAS_SCALE, Math.max(MIN_CANVAS_SCALE, s));
+
+  const zoomTo = useCallback((nextScale: number, anchorClientX: number, anchorClientY: number) => {
+    const el = containerRef.current;
+    if (!el) return;
+    setCanvasState((prev) => {
+      const rect = el.getBoundingClientRect();
+      const anchorX = anchorClientX - rect.left;
+      const anchorY = anchorClientY - rect.top;
+      const oldScale = prev.scale || 1;
+      const scale = clampScale(nextScale);
+      const worldX = (anchorX - prev.offsetX) / oldScale;
+      const worldY = (anchorY - prev.offsetY) / oldScale;
+      let offsetX = anchorX - worldX * scale;
+      let offsetY = anchorY - worldY * scale;
+
+      if (widgets.length) {
+        const viewportW = el.clientWidth || rect.width;
+        const viewportH = el.clientHeight || rect.height;
+        const padding = 20;
+        const minX = Math.min(...widgets.map(w => w.x));
+        const minY = Math.min(...widgets.map(w => w.y));
+        const maxX = Math.max(...widgets.map(w => w.x + w.width));
+        const maxY = Math.max(...widgets.map(w => w.y + w.height));
+
+        const contentW = (maxX - minX) * scale;
+        const contentH = (maxY - minY) * scale;
+
+        if (contentW <= viewportW - padding * 2) {
+          offsetX = (viewportW - contentW) / 2 - minX * scale;
+        } else {
+          const minOffsetX = viewportW - padding - maxX * scale;
+          const maxOffsetX = padding - minX * scale;
+          offsetX = Math.min(maxOffsetX, Math.max(minOffsetX, offsetX));
+        }
+
+        if (contentH <= viewportH - padding * 2) {
+          offsetY = (viewportH - contentH) / 2 - minY * scale;
+        } else {
+          const minOffsetY = viewportH - padding - maxY * scale;
+          const maxOffsetY = padding - minY * scale;
+          offsetY = Math.min(maxOffsetY, Math.max(minOffsetY, offsetY));
+        }
+      }
+
+      return { ...prev, scale, offsetX, offsetY };
+    });
+  }, [widgets]);
+
+  const getNextZoomScale = (current: number, dir: 'in' | 'out') => {
+    const s = clampScale(current || 1);
+    const eps = 1e-6;
+    if (dir === 'in') {
+      for (let i = 0; i < ZOOM_STEPS.length; i++) {
+        if (ZOOM_STEPS[i] > s + eps) return ZOOM_STEPS[i];
+      }
+      return null;
+    }
+    for (let i = ZOOM_STEPS.length - 1; i >= 0; i--) {
+      if (ZOOM_STEPS[i] < s - eps) return ZOOM_STEPS[i];
+    }
+    return null;
+  };
 
   // 全局鼠标事件监听
   useEffect(() => {
@@ -752,11 +892,13 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         if (resizingWidgetId && resizeStart) {
           const deltaX = (e.clientX - resizeStart.x) / canvasState.scale;
           const deltaY = (e.clientY - resizeStart.y) / canvasState.scale;
-          updateWidgetById(resizingWidgetId, (w) => ({
-            ...w,
-            width: Math.max(200, resizeStart.width + deltaX),
-            height: Math.max(150, resizeStart.height + deltaY)
-          }));
+          updateWidgetById(resizingWidgetId, (w) => {
+            const minWidth = w.type === 'terminal' ? MIN_TERMINAL_WIDTH : 200;
+            const maxWidth = w.type === 'terminal' ? (MAX_TERMINAL_WIDTH ?? Infinity) : Infinity;
+            const nextWidth = Math.min(maxWidth, Math.max(minWidth, resizeStart.width + deltaX));
+            const nextHeight = Math.max(150, resizeStart.height + deltaY);
+            return { ...w, width: nextWidth, height: nextHeight };
+          });
         } else {
           const deltaX = e.clientX - lastMousePos.current.x;
           const deltaY = e.clientY - lastMousePos.current.y;
@@ -768,7 +910,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               offsetY: prev.offsetY + deltaY
             }));
           } else if (draggedWidgetId) {
-            updateWidgetById(draggedWidgetId, (w) => ({ ...w, x: w.x + deltaX, y: w.y + deltaY }));
+            const scale = canvasState.scale || 1;
+            updateWidgetById(draggedWidgetId, (w) => ({ ...w, x: w.x + (deltaX / scale), y: w.y + (deltaY / scale) }));
           }
         }
 
@@ -810,7 +953,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       linear-gradient(#e5e6eb 1px, transparent 1px),
       linear-gradient(90deg, #e5e6eb 1px, transparent 1px)
     `,
-    backgroundSize: '20px 20px',
+    backgroundSize: `${20 * (canvasState.scale || 1)}px ${20 * (canvasState.scale || 1)}px`,
     backgroundPosition: `${canvasState.offsetX}px ${canvasState.offsetY}px`,
     opacity: 0.5,
     pointerEvents: 'none', // 让网格不阻挡鼠标事件
@@ -860,8 +1003,36 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       }}
       onMouseDown={handleCanvasMouseDown}
     >
-      {/* 网格背景 */}
       <div style={gridStyle} />
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          transform: `translate3d(${canvasState.offsetX}px, ${canvasState.offsetY}px, 0) scale(${canvasState.scale || 1})`,
+          transformOrigin: '0 0',
+        }}
+      >
+        {widgets.map(widget => (
+          widget.type === 'terminal' ? (
+            <TerminalWidget
+              key={widget.id}
+              widget={widget}
+              canvasState={canvasState}
+              isDragging={isDragging}
+              draggedWidgetId={draggedWidgetId}
+              resizingWidgetId={resizingWidgetId}
+              appearing={!!appearingIds[widget.id]}
+              removing={!!removingIds[widget.id]}
+              onMouseDown={handleWidgetMouseDown}
+              onToggleConnection={(e, w) => handleToggleConnection(e as any, w)}
+              onManualSend={(e, w) => handleManualSend(e as any, w)}
+              onOpenConfig={openWidgetConfig}
+              onRemove={handleRemoveWidget}
+              onResizeMouseDown={handleResizeMouseDown}
+            />
+          ) : null
+        ))}
+      </div>
 
       {/* 编辑弹窗 */}
       <Modal
@@ -1062,38 +1233,115 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       </Modal>
 
       {/* 悬浮添加按钮 */}
-      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 1000 }}>
-        <Space>
-          <Tooltip content={t('monitor.layout.export')}>
-            <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-          </Tooltip>
-          <Dropdown droplist={droplist} position='br'>
-            <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-          </Dropdown>
-        </Space>
-      </div>
+      {(() => {
+        const node = (
+          <div
+            ref={floatingActionsRef}
+            style={{
+              position: 'fixed',
+              top: floatingActionsPos?.top ?? 20,
+              right: floatingActionsPos?.right ?? 20,
+              zIndex: 2147483647,
+              transition: 'top 180ms ease, right 180ms ease',
+            }}
+          >
+            <Space>
+              <Tooltip content={t('monitor.layout.export')}>
+                <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+              </Tooltip>
+              <Dropdown droplist={droplist} position='br'>
+                <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+              </Dropdown>
+            </Space>
+          </div>
+        );
+        return canUseDom ? createPortal(node, document.body) : node;
+      })()}
 
-      {/* 渲染循环 */}
-      {widgets.map(widget => (
-        widget.type === 'terminal' ? (
-          <TerminalWidget
-            key={widget.id}
-            widget={widget}
-            canvasState={canvasState}
-            isDragging={isDragging}
-            draggedWidgetId={draggedWidgetId}
-            resizingWidgetId={resizingWidgetId}
-            appearing={!!appearingIds[widget.id]}
-            removing={!!removingIds[widget.id]}
-            onMouseDown={handleWidgetMouseDown}
-            onToggleConnection={(e, w) => handleToggleConnection(e as any, w)}
-            onManualSend={(e, w) => handleManualSend(e as any, w)}
-            onOpenConfig={openWidgetConfig}
-            onRemove={handleRemoveWidget}
-            onResizeMouseDown={handleResizeMouseDown}
-          />
-        ) : null
-      ))}
+      {(() => {
+        const scale = clampScale(canvasState.scale || 1);
+        const nextOut = getNextZoomScale(scale, 'out');
+        const nextIn = getNextZoomScale(scale, 'in');
+        const lockedStyle: React.CSSProperties = { opacity: 0.45 };
+        const handleExceed = () => Message.warning('放大/缩小已超出限制。');
+        const zoomText = `${Math.round(scale * 100)}%`;
+        const node = (
+          <div
+            style={{
+              position: 'fixed',
+              bottom: floatingZoomPos?.bottom ?? 20,
+              right: floatingZoomPos?.right ?? 20,
+              zIndex: 2147483647,
+              transition: 'bottom 180ms ease, right 180ms ease',
+            }}
+          >
+            <div
+              style={{
+                marginBottom: 8,
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: 'rgba(0,0,0,0.55)',
+                color: '#fff',
+                fontSize: 12,
+                lineHeight: '16px',
+                textAlign: 'center',
+                userSelect: 'none',
+              }}
+            >
+              缩放：{zoomText}
+            </div>
+            <Button.Group>
+              <Button
+                type={nextOut ? 'primary' : 'secondary'}
+                size="large"
+                icon={<IconMinus />}
+                style={nextOut ? undefined : lockedStyle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!nextOut) {
+                    handleExceed();
+                    return;
+                  }
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  zoomTo(nextOut, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                }}
+              />
+              <Button
+                type="primary"
+                size="large"
+                icon={<IconSync />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  zoomTo(1, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                }}
+              />
+              <Button
+                type={nextIn ? 'primary' : 'secondary'}
+                size="large"
+                icon={<IconPlus />}
+                style={nextIn ? undefined : lockedStyle}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!nextIn) {
+                    handleExceed();
+                    return;
+                  }
+                  const el = containerRef.current;
+                  if (!el) return;
+                  const rect = el.getBoundingClientRect();
+                  zoomTo(nextIn, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                }}
+              />
+            </Button.Group>
+          </div>
+        );
+        return canUseDom ? createPortal(node, document.body) : node;
+      })()}
     </div>
   );
 }

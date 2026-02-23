@@ -1,19 +1,68 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Empty } from '@arco-design/web-react';
 
 export default function TerminalLogView(props: { logs: string[]; emptyText: string; height: number | string }) {
   const { logs, emptyText, height } = props;
   const containerRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const lastLog = useMemo(() => (logs.length ? logs[logs.length - 1] : ''), [logs]);
+  const [followBottom, setFollowBottom] = useState(true);
+  const bottomThreshold = 24;
+
+  useEffect(() => {
+    followBottomRef.current = followBottom;
+  }, [followBottom]);
+
+  const scrollToBottom = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const maxTop = el.scrollHeight - el.clientHeight;
+    el.scrollTop = Math.max(0, Math.ceil(maxTop));
+  };
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    requestAnimationFrame(() => {
+    const handleScroll = () => {
       const next = containerRef.current;
       if (!next) return;
-      next.scrollTop = next.scrollHeight;
+      const atBottom = next.scrollTop + next.clientHeight >= next.scrollHeight - bottomThreshold;
+      setFollowBottom(atBottom);
+    };
+    handleScroll();
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!followBottom) return;
+    const el = containerRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      scrollToBottom();
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
     });
-  }, [logs.length]);
+  }, [lastLog, followBottom]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!followBottomRef.current) return;
+      requestAnimationFrame(() => {
+        scrollToBottom();
+      });
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
 
   return (
     <div
@@ -32,7 +81,7 @@ export default function TerminalLogView(props: { logs: string[]; emptyText: stri
     >
       {logs.length === 0 && <Empty description={emptyText} />}
       {logs.map((log, idx) => (
-        <div key={idx} style={{ marginBottom: 4, lineHeight: '1.4', display: 'flex' }}>
+        <div key={idx} style={{ marginBottom: 4, lineHeight: '20px', display: 'flex' }}>
           <div style={{ width: 24, flexShrink: 0, textAlign: 'center' }}>
             {log.includes('-TX]') && <span style={{ color: '#569cd6' }}>➜</span>}
             {log.includes('-RX]') && <span style={{ color: '#4ec9b0' }}>➜</span>}
@@ -66,6 +115,7 @@ export default function TerminalLogView(props: { logs: string[]; emptyText: stri
           </div>
         </div>
       ))}
+      <div style={{ height: 24 }} />
     </div>
   );
 }
