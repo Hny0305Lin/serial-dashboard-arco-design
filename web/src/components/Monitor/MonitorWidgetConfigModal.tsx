@@ -33,6 +33,7 @@ export default function MonitorWidgetConfigModal(props: {
     normalizeTitle,
     normalizePath
   } = props;
+  const isTerminal = editingWidget?.type === 'terminal';
 
   return (
     <Modal
@@ -44,63 +45,90 @@ export default function MonitorWidgetConfigModal(props: {
       focusLock={true}
     >
       <Form form={form} layout="vertical" onValuesChange={onValuesChange}>
-        <Form.Item label={t('monitor.config.titleField')} required>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <div style={{ flex: 1 }}>
-              <Form.Item
-                field="title"
-                rules={[
-                  {
-                    validator: (value, callback) => {
-                      const title = String(value ?? '').trim();
-                      if (!title) {
-                        callback(t('monitor.validation.titleRequired'));
-                        return;
+        <Form.Item label={isTerminal ? t('monitor.config.titleField') : t('monitor.config.titleOnly')} required>
+          {isTerminal ? (
+            <>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <Form.Item
+                    field="title"
+                    rules={[
+                      {
+                        validator: (value, callback) => {
+                          const title = String(value ?? '').trim();
+                          if (!title) {
+                            callback(t('monitor.validation.titleRequired'));
+                            return;
+                          }
+                          if (!/[\p{L}\p{N}]/u.test(title)) {
+                            callback(t('monitor.validation.titleInvalid'));
+                            return;
+                          }
+                          const key = normalizeTitle(title);
+                          const dup = widgets.some(w => w.type === 'terminal' && normalizeTitle(w.title) === key && w.id !== editingWidget?.id);
+                          if (dup) {
+                            callback(t('monitor.validation.titleDuplicate'));
+                            return;
+                          }
+                          callback();
+                        }
                       }
-                      if (!/[\p{L}\p{N}]/u.test(title)) {
-                        callback(t('monitor.validation.titleInvalid'));
-                        return;
-                      }
-                      const key = normalizeTitle(title);
-                      const dup = widgets.some(w => w.type === 'terminal' && normalizeTitle(w.title) === key && w.id !== editingWidget?.id);
-                      if (dup) {
-                        callback(t('monitor.validation.titleDuplicate'));
-                        return;
-                      }
-                      callback();
+                    ]}
+                    noStyle
+                  >
+                    <Input placeholder={t('monitor.config.titlePlaceholder')} />
+                  </Form.Item>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <Form.Item field="subtitle" noStyle>
+                    <Input placeholder={t('monitor.config.subtitlePlaceholder')} />
+                  </Form.Item>
+                </div>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Space>
+                  <Space>
+                    <Typography.Text>{t('monitor.config.showSubtitle')}</Typography.Text>
+                    <Form.Item field="showSubtitle" triggerPropName="checked" noStyle initialValue={true}>
+                      <Switch />
+                    </Form.Item>
+                  </Space>
+                  <Divider type="vertical" />
+                  <Space>
+                    <Typography.Text>{t('monitor.config.autoSend')}</Typography.Text>
+                    <Form.Item field="autoSend.enabled" triggerPropName="checked" noStyle initialValue={false}>
+                      <Switch />
+                    </Form.Item>
+                  </Space>
+                </Space>
+              </div>
+            </>
+          ) : (
+            <Form.Item
+              field="title"
+              rules={[
+                {
+                  validator: (value, callback) => {
+                    const title = String(value ?? '').trim();
+                    if (!title) {
+                      callback(t('monitor.validation.titleRequired'));
+                      return;
                     }
+                    if (!/[\p{L}\p{N}]/u.test(title)) {
+                      callback(t('monitor.validation.titleInvalid'));
+                      return;
+                    }
+                    callback();
                   }
-                ]}
-                noStyle
-              >
-                <Input placeholder={t('monitor.config.titlePlaceholder')} />
-              </Form.Item>
-            </div>
-            <div style={{ flex: 1 }}>
-              <Form.Item field="subtitle" noStyle>
-                <Input placeholder={t('monitor.config.subtitlePlaceholder')} />
-              </Form.Item>
-            </div>
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <Space>
-              <Space>
-                <Typography.Text>{t('monitor.config.showSubtitle')}</Typography.Text>
-                <Form.Item field="showSubtitle" triggerPropName="checked" noStyle initialValue={true}>
-                  <Switch />
-                </Form.Item>
-              </Space>
-              <Divider type="vertical" />
-              <Space>
-                <Typography.Text>{t('monitor.config.autoSend')}</Typography.Text>
-                <Form.Item field="autoSend.enabled" triggerPropName="checked" noStyle initialValue={false}>
-                  <Switch />
-                </Form.Item>
-              </Space>
-            </Space>
-          </div>
+                }
+              ]}
+              noStyle
+            >
+              <Input placeholder={t('monitor.config.titlePlaceholder')} />
+            </Form.Item>
+          )}
         </Form.Item>
-        {editingWidget?.type === 'terminal' && (
+        {isTerminal && (
           <>
             <Form.Item label={t('monitor.config.displayMode')} field="displayMode" initialValue="text">
               <Radio.Group type="button">

@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { IconPlus, IconCode, IconDownload, IconMinus, IconSync, IconUnorderedList } from '@arco-design/web-react/icon';
+import { IconPlus, IconCode, IconDownload, IconMinus, IconSync, IconClockCircle, IconUnorderedList } from '@arco-design/web-react/icon';
 import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Tooltip, Grid, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
 import TerminalWidget from './TerminalWidget';
+import ClockWidget from './ClockWidget';
 import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { inferSerialReason } from '../../utils/serialReason';
@@ -31,6 +32,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const normalizePath = (p?: string) => (p || '').toLowerCase().replace(/^\\\\.\\/, '');
   const normalizeTitle = (s?: string) => (s || '').trim().toLowerCase();
   const getDefaultWidgetName = (type?: MonitorWidget['type']) => {
+    if (type === 'clock') return t('monitor.newClock');
     if (type === 'chart') return t('monitor.newChart');
     if (type === 'status') return t('monitor.statusPanel');
     return t('monitor.newTerminal');
@@ -92,6 +94,20 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       .terminal-rx-dot--pulse {
         opacity: 1;
         animation: terminal-rx-breathe 0.9s ease-in-out infinite;
+      }
+      .monitor-clock-select .arco-select-view {
+        background: transparent !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+      }
+      .monitor-clock-select .arco-select-view:hover {
+        background: rgba(0,0,0,0.03) !important;
+        border-color: transparent !important;
+      }
+      .monitor-clock-select.arco-select-open .arco-select-view {
+        background: rgba(0,0,0,0.04) !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
       }
       @keyframes terminal-rx-breathe {
         0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 180, 42, 0.45); }
@@ -160,12 +176,31 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     subtitle: w.subtitle,
     showSubtitle: w.showSubtitle,
     autoSend: w.autoSend,
-    displayMode: w.displayMode
+    displayMode: w.displayMode,
+    clockSource: w.clockSource
   });
 
   const hydrateWidgetFromStorage = (w: Partial<StoredMonitorWidgetV1>): MonitorWidget => {
     const id = w.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const type = (w.type as MonitorWidget['type']) || 'terminal';
+    const base: MonitorWidget = {
+      id,
+      type,
+      title: w.title || getDefaultWidgetName(type),
+      x: typeof w.x === 'number' ? w.x : 0,
+      y: typeof w.y === 'number' ? w.y : 0,
+      width: typeof w.width === 'number' ? w.width : (type === 'clock' ? 320 : 640),
+      height: typeof w.height === 'number' ? w.height : (type === 'clock' ? 200 : 480),
+      zIndex: typeof w.zIndex === 'number' ? w.zIndex : 1,
+    };
+
+    if (type === 'clock') {
+      return {
+        ...base,
+        clockSource: w.clockSource === 'beijing' ? 'beijing' : 'local',
+      };
+    }
+
     const autoSend = w.autoSend
       ? {
         enabled: !!w.autoSend.enabled,
@@ -176,14 +211,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     const displayMode = w.displayMode || 'text';
 
     return {
-      id,
-      type,
-      title: w.title || t('monitor.newTerminal'),
-      x: typeof w.x === 'number' ? w.x : 0,
-      y: typeof w.y === 'number' ? w.y : 0,
-      width: typeof w.width === 'number' ? w.width : 640,
-      height: typeof w.height === 'number' ? w.height : 480,
-      zIndex: typeof w.zIndex === 'number' ? w.zIndex : 1,
+      ...base,
       portPath: w.portPath,
       baudRate: w.baudRate || 9600,
       dataBits: w.dataBits || 8,
@@ -418,6 +446,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const [floatingActionsPos, setFloatingActionsPos] = useState<{ top: number; right: number } | null>(null);
   const [floatingZoomPos, setFloatingZoomPos] = useState<{ bottom: number; right: number } | null>(null);
   const [floatingActivePos, setFloatingActivePos] = useState<{ bottom: number; left: number } | null>(null);
+  const [zoomHover, setZoomHover] = useState(false);
   const canUseDom = typeof window !== 'undefined' && typeof document !== 'undefined';
 
   const updateFloatingActionsPos = useCallback(() => {
@@ -581,13 +610,17 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     lastMousePos.current = { x: e.clientX, y: e.clientY };
   };
 
+  const updateWidget = useCallback((id: string, patch: Partial<MonitorWidget>) => {
+    setWidgets(prev => prev.map(w => (w.id === id ? { ...w, ...patch } : w)));
+  }, []);
+
   const handleAddWidget = (type: MonitorWidget['type']) => {
     let createdId: string | null = null;
     setWidgets(prev => {
       // 智能布局：寻找一个不重叠的位置
       // 算法：从当前视野中心开始，向外螺旋寻找空闲区域
-      const W = 640;
-      const H = 480;
+      const W = type === 'clock' ? 320 : 640;
+      const H = type === 'clock' ? 200 : 480;
 
       // 当前视野的中心点 (相对于画布原点)
       // 注意：offsetX 是画布相对于视口的偏移，所以视口坐标 = 组件坐标 + offsetX
@@ -648,7 +681,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       });
       const baseTitle = getDefaultWidgetName(type);
       const newTitle = type === 'terminal' ? makeUniqueTitle(baseTitle, usedTitles) : baseTitle;
-      const newWidget: MonitorWidget = {
+      const newWidgetBase: MonitorWidget = {
         id: Date.now().toString(),
         type,
         title: newTitle,
@@ -657,17 +690,21 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         width: W,
         height: H,
         zIndex: Math.max(...prev.map(w => w.zIndex), 0) + 1,
-        // 默认显示副标题
-        showSubtitle: true,
-        // 初始自动发送配置
-        autoSend: {
-          enabled: false,
-          content: '',
-          encoding: 'hex'
-        },
-        displayMode: 'text',
-        logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`]
       };
+
+      const newWidget: MonitorWidget = type === 'clock'
+        ? { ...newWidgetBase, clockSource: 'local' }
+        : {
+          ...newWidgetBase,
+          showSubtitle: true,
+          autoSend: {
+            enabled: false,
+            content: '',
+            encoding: 'hex'
+          },
+          displayMode: 'text',
+          logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`]
+        };
       createdId = newWidget.id;
 
       // 创建后直接打开编辑弹窗
@@ -708,6 +745,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleValuesChange = (changedValues: Partial<MonitorWidget>, allValues: Partial<MonitorWidget>) => {
+    if (editingWidget?.type !== 'terminal') return;
     if (changedValues.showSubtitle !== undefined && changedValues.showSubtitle) {
       // 当开启副标题时，如果副标题为空，则自动生成
       const currentSubtitle = form.getFieldValue('subtitle');
@@ -791,6 +829,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     <Menu>
       <Menu.Item key='terminal' onClick={() => handleAddWidget('terminal')}>
         <Space><IconCode /> {t('monitor.widget.terminal')}</Space>
+      </Menu.Item>
+      <Menu.Item key='clock' onClick={() => handleAddWidget('clock')}>
+        <Space><IconClockCircle /> {t('monitor.widget.clock')}</Space>
       </Menu.Item>
     </Menu>
   );
@@ -1130,6 +1171,23 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               onRemove={handleRemoveWidget}
               onResizeMouseDown={handleResizeMouseDown}
             />
+          ) : widget.type === 'clock' ? (
+            <ClockWidget
+              key={widget.id}
+              widget={widget}
+              canvasState={canvasState}
+              nowTs={nowTs}
+              isDragging={isDragging}
+              draggedWidgetId={draggedWidgetId}
+              resizingWidgetId={resizingWidgetId}
+              appearing={!!appearingIds[widget.id]}
+              removing={!!removingIds[widget.id]}
+              onMouseDown={handleWidgetMouseDown}
+              onOpenConfig={openWidgetConfig}
+              onRemove={handleRemoveWidget}
+              onResizeMouseDown={handleResizeMouseDown}
+              onUpdate={updateWidget}
+            />
           ) : null
         ))}
       </div>
@@ -1241,68 +1299,81 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
             }}
           >
             <div
-              style={{
-                marginBottom: 8,
-                padding: '4px 10px',
-                borderRadius: 999,
-                background: 'rgba(0,0,0,0.55)',
-                color: '#fff',
-                fontSize: 12,
-                lineHeight: '16px',
-                textAlign: 'center',
-                userSelect: 'none',
-              }}
+              style={{ position: 'relative', display: 'inline-block' }}
+              onMouseEnter={() => setZoomHover(true)}
+              onMouseLeave={() => setZoomHover(false)}
             >
-              缩放：{zoomText}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  bottom: '100%',
+                  marginBottom: 8,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: 'rgba(0,0,0,0.55)',
+                  color: '#fff',
+                  fontSize: 12,
+                  lineHeight: '16px',
+                  textAlign: 'center',
+                  userSelect: 'none',
+                  pointerEvents: 'none',
+                  opacity: zoomHover ? 1 : 0,
+                  transform: zoomHover ? 'translate(-50%, 0)' : 'translate(-50%, 6px)',
+                  transition: 'opacity 160ms ease, transform 160ms ease',
+                }}
+              >
+                {zoomText}
+              </div>
+              <Button.Group>
+                <Button
+                  type={nextOut ? 'primary' : 'secondary'}
+                  size="large"
+                  icon={<IconMinus />}
+                  style={nextOut ? undefined : lockedStyle}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!nextOut) {
+                      handleExceed();
+                      return;
+                    }
+                    const el = containerRef.current;
+                    if (!el) return;
+                    const rect = el.getBoundingClientRect();
+                    zoomTo(nextOut, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                  }}
+                />
+                <Button
+                  type="primary"
+                  size="large"
+                  icon={<IconSync />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const el = containerRef.current;
+                    if (!el) return;
+                    const rect = el.getBoundingClientRect();
+                    zoomTo(1, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                  }}
+                />
+                <Button
+                  type={nextIn ? 'primary' : 'secondary'}
+                  size="large"
+                  icon={<IconPlus />}
+                  style={nextIn ? undefined : lockedStyle}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!nextIn) {
+                      handleExceed();
+                      return;
+                    }
+                    const el = containerRef.current;
+                    if (!el) return;
+                    const rect = el.getBoundingClientRect();
+                    zoomTo(nextIn, rect.left + rect.width / 2, rect.top + rect.height / 2);
+                  }}
+                />
+              </Button.Group>
             </div>
-            <Button.Group>
-              <Button
-                type={nextOut ? 'primary' : 'secondary'}
-                size="large"
-                icon={<IconMinus />}
-                style={nextOut ? undefined : lockedStyle}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!nextOut) {
-                    handleExceed();
-                    return;
-                  }
-                  const el = containerRef.current;
-                  if (!el) return;
-                  const rect = el.getBoundingClientRect();
-                  zoomTo(nextOut, rect.left + rect.width / 2, rect.top + rect.height / 2);
-                }}
-              />
-              <Button
-                type="primary"
-                size="large"
-                icon={<IconSync />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const el = containerRef.current;
-                  if (!el) return;
-                  const rect = el.getBoundingClientRect();
-                  zoomTo(1, rect.left + rect.width / 2, rect.top + rect.height / 2);
-                }}
-              />
-              <Button
-                type={nextIn ? 'primary' : 'secondary'}
-                size="large"
-                icon={<IconPlus />}
-                style={nextIn ? undefined : lockedStyle}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!nextIn) {
-                    handleExceed();
-                    return;
-                  }
-                  const el = containerRef.current;
-                  if (!el) return;
-                  const rect = el.getBoundingClientRect();
-                  zoomTo(nextIn, rect.left + rect.width / 2, rect.top + rect.height / 2);
-                }}
-              />
-            </Button.Group>
           </div>
         );
         return canUseDom ? createPortal(node, document.body) : node;
