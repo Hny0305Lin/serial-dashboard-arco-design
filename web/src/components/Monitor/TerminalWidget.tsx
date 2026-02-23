@@ -89,28 +89,18 @@ export default function TerminalWidget(props: {
             </div>
           </Tooltip>
         </Space>
-        <Space>
+        <Button.Group>
           <Tooltip content={widget.isConnected ? t('monitor.disconnect') : t('monitor.connect')}>
             <Button
-              type={widget.isConnected ? 'primary' : 'secondary'}
+              type="primary"
               status={widget.isConnected ? 'success' : 'default'}
               size="mini"
               icon={widget.isConnected ? <IconLink /> : <IconStop />}
               onClick={(e) => onToggleConnection(e, widget)}
             />
           </Tooltip>
-          {widget.autoSend?.enabled && (
-            <Tooltip content={t('monitor.manualSend')}>
-              <Button
-                type="text"
-                size="mini"
-                icon={<IconThunderbolt />}
-                onClick={(e) => onManualSend(e, widget)}
-              />
-            </Tooltip>
-          )}
           <Button
-            type="text"
+            type="primary"
             size="mini"
             icon={<IconSettings />}
             onClick={(e) => {
@@ -119,7 +109,7 @@ export default function TerminalWidget(props: {
             }}
           />
           <Button
-            type="text"
+            type="primary"
             size="mini"
             status="danger"
             icon={<IconClose />}
@@ -128,7 +118,7 @@ export default function TerminalWidget(props: {
               onRemove(widget.id);
             }}
           />
-        </Space>
+        </Button.Group>
       </div>
 
       <div style={{ flex: 1, padding: 12, overflow: 'hidden', position: 'relative' }}>
