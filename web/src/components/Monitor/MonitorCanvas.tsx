@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { IconPlus, IconCode, IconDownload, IconMinus, IconSync } from '@arco-design/web-react/icon';
+import { IconPlus, IconCode, IconDownload, IconMinus, IconSync, IconUnorderedList } from '@arco-design/web-react/icon';
 import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
@@ -14,7 +14,7 @@ const { Row, Col } = Grid;
 const INITIAL_WIDGETS: MonitorWidget[] = [];
 const MONITOR_LAYOUT_STORAGE_KEY = 'monitorCanvasLayoutV1';
 
-type StoredMonitorWidgetV1 = Omit<MonitorWidget, 'logs' | 'isConnected'>;
+type StoredMonitorWidgetV1 = Omit<MonitorWidget, 'logs' | 'isConnected' | 'lastRxAt'>;
 type StoredMonitorLayoutV1 = {
   version: 1;
   canvasState: CanvasState;
@@ -80,6 +80,22 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       .monitor-widget {
         will-change: transform, opacity;
       }
+      .terminal-rx-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #00b42a;
+        opacity: 0;
+      }
+      .terminal-rx-dot--pulse {
+        opacity: 1;
+        animation: terminal-rx-breathe 0.9s ease-in-out infinite;
+      }
+      @keyframes terminal-rx-breathe {
+        0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 180, 42, 0.45); }
+        50% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(0, 180, 42, 0); }
+        100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 180, 42, 0); }
+      }
     `;
     document.head.appendChild(style);
     return () => {
@@ -99,6 +115,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const saveTimerRef = useRef<number | null>(null);
   const restorePromptShownRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
+  const [nowTs, setNowTs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
     const list = await serial.refreshPorts(true);
@@ -372,7 +394,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
                     cleanedText;
 
               const newLogs = [...(w.logs || []), `[${path}-RX] ${payload}`].slice(-500);
-              return { ...w, logs: newLogs };
+              return { ...w, logs: newLogs, lastRxAt: Date.now() };
             }
             return w;
           }));
@@ -489,6 +511,49 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       );
     });
   };
+
+  const canvasStateRef = useRef(canvasState);
+  const panRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    canvasStateRef.current = canvasState;
+  }, [canvasState]);
+
+  const stopPan = useCallback(() => {
+    if (panRafRef.current) {
+      window.cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isDragging || draggedWidgetId || resizingWidgetId) {
+      stopPan();
+    }
+  }, [isDragging, draggedWidgetId, resizingWidgetId, stopPan]);
+
+  const animatePanTo = useCallback((toOffsetX: number, toOffsetY: number) => {
+    if (!canUseDom) return;
+    stopPan();
+    const from = canvasStateRef.current;
+    const start = performance.now();
+    const duration = 260;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const k = 1 - Math.pow(1 - t, 3);
+      setCanvasState(prev => ({
+        ...prev,
+        offsetX: from.offsetX + (toOffsetX - from.offsetX) * k,
+        offsetY: from.offsetY + (toOffsetY - from.offsetY) * k
+      }));
+      if (t < 1) {
+        panRafRef.current = window.requestAnimationFrame(step);
+      } else {
+        panRafRef.current = null;
+      }
+    };
+    panRafRef.current = window.requestAnimationFrame(step);
+  }, [canUseDom, stopPan]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // 只有点击左键且不是在组件上点击时才触发
@@ -819,6 +884,43 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const clampScale = (s: number) => Math.min(MAX_CANVAS_SCALE, Math.max(MIN_CANVAS_SCALE, s));
 
+  const clampOffsets = useCallback((scale: number, offsetX: number, offsetY: number) => {
+    const el = containerRef.current;
+    if (!el) return { offsetX, offsetY };
+    if (!widgets.length) return { offsetX, offsetY };
+    const rect = el.getBoundingClientRect();
+    const viewportW = el.clientWidth || rect.width;
+    const viewportH = el.clientHeight || rect.height;
+    const padding = 20;
+    const minX = Math.min(...widgets.map(w => w.x));
+    const minY = Math.min(...widgets.map(w => w.y));
+    const maxX = Math.max(...widgets.map(w => w.x + w.width));
+    const maxY = Math.max(...widgets.map(w => w.y + w.height));
+    const contentW = (maxX - minX) * scale;
+    const contentH = (maxY - minY) * scale;
+
+    let nextX = offsetX;
+    let nextY = offsetY;
+
+    if (contentW <= viewportW - padding * 2) {
+      nextX = (viewportW - contentW) / 2 - minX * scale;
+    } else {
+      const minOffsetX = viewportW - padding - maxX * scale;
+      const maxOffsetX = padding - minX * scale;
+      nextX = Math.min(maxOffsetX, Math.max(minOffsetX, nextX));
+    }
+
+    if (contentH <= viewportH - padding * 2) {
+      nextY = (viewportH - contentH) / 2 - minY * scale;
+    } else {
+      const minOffsetY = viewportH - padding - maxY * scale;
+      const maxOffsetY = padding - minY * scale;
+      nextY = Math.min(maxOffsetY, Math.max(minOffsetY, nextY));
+    }
+
+    return { offsetX: nextX, offsetY: nextY };
+  }, [widgets]);
+
   const zoomTo = useCallback((nextScale: number, anchorClientX: number, anchorClientY: number) => {
     const el = containerRef.current;
     if (!el) return;
@@ -832,39 +934,13 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       const worldY = (anchorY - prev.offsetY) / oldScale;
       let offsetX = anchorX - worldX * scale;
       let offsetY = anchorY - worldY * scale;
-
-      if (widgets.length) {
-        const viewportW = el.clientWidth || rect.width;
-        const viewportH = el.clientHeight || rect.height;
-        const padding = 20;
-        const minX = Math.min(...widgets.map(w => w.x));
-        const minY = Math.min(...widgets.map(w => w.y));
-        const maxX = Math.max(...widgets.map(w => w.x + w.width));
-        const maxY = Math.max(...widgets.map(w => w.y + w.height));
-
-        const contentW = (maxX - minX) * scale;
-        const contentH = (maxY - minY) * scale;
-
-        if (contentW <= viewportW - padding * 2) {
-          offsetX = (viewportW - contentW) / 2 - minX * scale;
-        } else {
-          const minOffsetX = viewportW - padding - maxX * scale;
-          const maxOffsetX = padding - minX * scale;
-          offsetX = Math.min(maxOffsetX, Math.max(minOffsetX, offsetX));
-        }
-
-        if (contentH <= viewportH - padding * 2) {
-          offsetY = (viewportH - contentH) / 2 - minY * scale;
-        } else {
-          const minOffsetY = viewportH - padding - maxY * scale;
-          const maxOffsetY = padding - minY * scale;
-          offsetY = Math.min(maxOffsetY, Math.max(minOffsetY, offsetY));
-        }
-      }
+      const clamped = clampOffsets(scale, offsetX, offsetY);
+      offsetX = clamped.offsetX;
+      offsetY = clamped.offsetY;
 
       return { ...prev, scale, offsetX, offsetY };
     });
-  }, [widgets]);
+  }, [clampOffsets]);
 
   const getNextZoomScale = (current: number, dir: 'in' | 'out') => {
     const s = clampScale(current || 1);
@@ -880,6 +956,22 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     }
     return null;
   };
+
+  const focusWidget = useCallback((id: string) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const w = widgets.find(x => x.id === id);
+    if (!w) return;
+    const scale = clampScale(canvasStateRef.current.scale || 1);
+    const viewportW = el.clientWidth || 0;
+    const viewportH = el.clientHeight || 0;
+    const cx = w.x + w.width / 2;
+    const cy = w.y + w.height / 2;
+    const rawOffsetX = viewportW / 2 - cx * scale;
+    const rawOffsetY = viewportH / 2 - cy * scale;
+    const clamped = clampOffsets(scale, rawOffsetX, rawOffsetY);
+    animatePanTo(clamped.offsetX, clamped.offsetY);
+  }, [animatePanTo, clampOffsets, widgets]);
 
   // 全局鼠标事件监听
   useEffect(() => {
@@ -1234,6 +1326,30 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       {/* 悬浮添加按钮 */}
       {(() => {
+        const activeWindowMs = 5000;
+        const activeWidgets = widgets
+          .filter(w => w.type === 'terminal' && !!w.lastRxAt && nowTs - (w.lastRxAt || 0) <= activeWindowMs)
+          .sort((a, b) => (b.lastRxAt || 0) - (a.lastRxAt || 0));
+        const activeDroplist = (
+          <Menu>
+            {activeWidgets.length === 0 ? (
+              <Menu.Item key="none" disabled>
+                暂无活跃组件
+              </Menu.Item>
+            ) : (
+              activeWidgets.map(w => (
+                <Menu.Item key={w.id} onClick={() => focusWidget(w.id)}>
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <span>{(w.title || '').trim() || getDefaultWidgetName(w.type)}</span>
+                    <span style={{ fontSize: 12, opacity: 0.7 }}>
+                      {(w.portPath || '').trim()} · {Math.max(0, Math.round((nowTs - (w.lastRxAt || 0)) / 1000))}s
+                    </span>
+                  </div>
+                </Menu.Item>
+              ))
+            )}
+          </Menu>
+        );
         const node = (
           <div
             ref={floatingActionsRef}
@@ -1246,6 +1362,11 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
             }}
           >
             <Space>
+              <Tooltip content="活跃组件">
+                <Dropdown droplist={activeDroplist} position="bl">
+                  <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+                </Dropdown>
+              </Tooltip>
               <Tooltip content={t('monitor.layout.export')}>
                 <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
               </Tooltip>

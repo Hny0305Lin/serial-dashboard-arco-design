@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { IconDragDotVertical, IconClose, IconSettings, IconThunderbolt, IconLink, IconStop } from '@arco-design/web-react/icon';
 import { Button, Space, Typography, Tooltip } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
@@ -36,6 +36,27 @@ export default function TerminalWidget(props: {
     onRemove,
     onResizeMouseDown
   } = props;
+  const [pulsing, setPulsing] = useState(false);
+  const [pulseKey, setPulseKey] = useState(0);
+  const pulseTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!widget.lastRxAt) return;
+    setPulseKey(widget.lastRxAt);
+    setPulsing(true);
+    if (pulseTimerRef.current) {
+      window.clearTimeout(pulseTimerRef.current);
+    }
+    pulseTimerRef.current = window.setTimeout(() => {
+      setPulsing(false);
+    }, 1200);
+    return () => {
+      if (pulseTimerRef.current) {
+        window.clearTimeout(pulseTimerRef.current);
+        pulseTimerRef.current = null;
+      }
+    };
+  }, [widget.lastRxAt]);
 
   return (
     <div
@@ -72,6 +93,9 @@ export default function TerminalWidget(props: {
       }}>
         <Space>
           <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
+          <span style={{ width: 12, display: 'inline-flex', justifyContent: 'center', alignItems: 'center' }}>
+            <span key={pulseKey} className={pulsing ? 'terminal-rx-dot terminal-rx-dot--pulse' : 'terminal-rx-dot'} />
+          </span>
           <Tooltip content={widget.portPath || t('monitor.noPort')}>
             <div
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}

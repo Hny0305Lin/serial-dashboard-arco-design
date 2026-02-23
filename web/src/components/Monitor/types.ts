@@ -35,6 +35,7 @@ export interface MonitorWidget {
 
   logs?: string[];   // 终端日志缓存 (新增)
   isConnected?: boolean; // 串口连接状态
+  lastRxAt?: number;
 }
 
 // 画布的视图状态
