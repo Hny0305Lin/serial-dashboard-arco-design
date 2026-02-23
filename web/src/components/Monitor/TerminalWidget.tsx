@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { IconDragDotVertical, IconClose, IconSettings, IconThunderbolt, IconLink, IconStop } from '@arco-design/web-react/icon';
-import { Button, Space, Typography, Tooltip } from '@arco-design/web-react';
+import { Button, Space, Typography, Tooltip, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
 import TerminalLogView from '../TerminalLogView';
@@ -57,6 +57,8 @@ export default function TerminalWidget(props: {
       }
     };
   }, [widget.lastRxAt]);
+
+  const canToggleConnection = !!String(widget.portPath || '').trim();
 
   return (
     <div
@@ -116,13 +118,21 @@ export default function TerminalWidget(props: {
           </Tooltip>
         </Space>
         <Button.Group>
-          <Tooltip content={widget.isConnected ? t('monitor.disconnect') : t('monitor.connect')}>
+          <Tooltip content={widget.isConnected ? t('monitor.disconnect') : (canToggleConnection ? t('monitor.connect') : t('monitor.noPort'))}>
             <Button
-              type="primary"
+              type={widget.isConnected ? 'primary' : (canToggleConnection ? 'primary' : 'secondary')}
               status={widget.isConnected ? 'success' : 'default'}
               size="mini"
               icon={widget.isConnected ? <IconLink /> : <IconStop />}
-              onClick={(e) => onToggleConnection(e, widget)}
+              style={widget.isConnected ? undefined : (canToggleConnection ? undefined : { opacity: 0.45 })}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!widget.isConnected && !canToggleConnection) {
+                  Message.warning(`${t('monitor.noPort')}，请先完成组件配置。`);
+                  return;
+                }
+                onToggleConnection(e, widget);
+              }}
             />
           </Tooltip>
           <Button

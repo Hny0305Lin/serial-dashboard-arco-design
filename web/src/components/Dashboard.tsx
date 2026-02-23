@@ -525,7 +525,7 @@ function AppContent() {
             collapsible
             trigger={null}
             breakpoint="xl"
-            style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)' }}
+            style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)', position: 'relative', zIndex: 250 }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{ height: 64, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
@@ -601,7 +601,7 @@ function AppContent() {
         )}
         <Layout className="no-scrollbar" style={isMonitor ? { overflow: 'hidden' } : { overflowY: 'auto' }}>
           {!headerHidden && (
-            <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Header style={{ height: '64px', padding: '0 20px', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 200 }}>
               <Space>
                 <Breadcrumb separator={<svg fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 48 48" aria-hidden="true" focusable="false" className="arco-icon arco-icon-oblique-line"><path d="M29.506 6.502 18.493 41.498"></path></svg>}>
                   <Breadcrumb.Item>

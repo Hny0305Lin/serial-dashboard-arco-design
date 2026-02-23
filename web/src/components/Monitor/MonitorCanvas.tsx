@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPlus, IconCode, IconDownload, IconMinus, IconSync, IconUnorderedList } from '@arco-design/web-react/icon';
-import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message } from '@arco-design/web-react';
+import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Tooltip, Grid, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
 import TerminalWidget from './TerminalWidget';
+import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { inferSerialReason } from '../../utils/serialReason';
 
@@ -13,6 +14,7 @@ const { Row, Col } = Grid;
 // 初始状态为空
 const INITIAL_WIDGETS: MonitorWidget[] = [];
 const MONITOR_LAYOUT_STORAGE_KEY = 'monitorCanvasLayoutV1';
+const FLOATING_PORTAL_Z_INDEX = 150;
 
 type StoredMonitorWidgetV1 = Omit<MonitorWidget, 'logs' | 'isConnected' | 'lastRxAt'>;
 type StoredMonitorLayoutV1 = {
@@ -415,6 +417,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const floatingActionsRafRef = useRef<number | null>(null);
   const [floatingActionsPos, setFloatingActionsPos] = useState<{ top: number; right: number } | null>(null);
   const [floatingZoomPos, setFloatingZoomPos] = useState<{ bottom: number; right: number } | null>(null);
+  const [floatingActivePos, setFloatingActivePos] = useState<{ bottom: number; left: number } | null>(null);
   const canUseDom = typeof window !== 'undefined' && typeof document !== 'undefined';
 
   const updateFloatingActionsPos = useCallback(() => {
@@ -425,6 +428,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     const top = Math.round(rect.top + 20);
     const right = Math.round(window.innerWidth - rect.right + 20);
     const bottom = Math.round(window.innerHeight - rect.bottom + 20);
+    const left = Math.round(rect.left + 20);
     setFloatingActionsPos((prev) => {
       if (prev && Math.abs(prev.top - top) < 1 && Math.abs(prev.right - right) < 1) return prev;
       return { top, right };
@@ -432,6 +436,10 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     setFloatingZoomPos((prev) => {
       if (prev && Math.abs(prev.bottom - bottom) < 1 && Math.abs(prev.right - right) < 1) return prev;
       return { bottom, right };
+    });
+    setFloatingActivePos((prev) => {
+      if (prev && Math.abs(prev.bottom - bottom) < 1 && Math.abs(prev.left - left) < 1) return prev;
+      return { bottom, left };
     });
   }, [canUseDom]);
 
@@ -1126,203 +1134,21 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         ))}
       </div>
 
-      {/* 编辑弹窗 */}
-      <Modal
-        title={t('monitor.config.modalTitle', { name: (editingWidget?.title || '').trim() || getDefaultWidgetName(editingWidget?.type) })}
-        visible={!!editingWidget}
+      <MonitorWidgetConfigModal
+        t={t}
+        editingWidget={editingWidget}
+        widgets={widgets}
+        portList={portList}
+        serial={serial}
+        onRefreshPorts={onRefreshPorts}
         onOk={handleSaveWidget}
         onCancel={() => setEditingWidget(null)}
-        autoFocus={false}
-        focusLock={true}
-      >
-        <Form form={form} layout="vertical" onValuesChange={handleValuesChange}>
-          <Form.Item label={t('monitor.config.titleField')} required>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <Form.Item
-                  field="title"
-                  rules={[
-                    {
-                      validator: (value, callback) => {
-                        const title = String(value ?? '').trim();
-                        if (!title) {
-                          callback(t('monitor.validation.titleRequired'));
-                          return;
-                        }
-                        if (!/[\p{L}\p{N}]/u.test(title)) {
-                          callback(t('monitor.validation.titleInvalid'));
-                          return;
-                        }
-                        const key = normalizeTitle(title);
-                        const dup = widgets.some(w => w.type === 'terminal' && normalizeTitle(w.title) === key && w.id !== editingWidget?.id);
-                        if (dup) {
-                          callback(t('monitor.validation.titleDuplicate'));
-                          return;
-                        }
-                        callback();
-                      }
-                    }
-                  ]}
-                  noStyle
-                >
-                  <Input placeholder={t('monitor.config.titlePlaceholder')} />
-                </Form.Item>
-              </div>
-              <div style={{ flex: 1 }}>
-                <Form.Item field="subtitle" noStyle>
-                  <Input placeholder={t('monitor.config.subtitlePlaceholder')} />
-                </Form.Item>
-              </div>
-            </div>
-            <div style={{ marginTop: 8 }}>
-              <Space>
-                <Space>
-                  <Typography.Text>{t('monitor.config.showSubtitle')}</Typography.Text>
-                  <Form.Item field="showSubtitle" triggerPropName="checked" noStyle initialValue={true}>
-                    <Switch />
-                  </Form.Item>
-                </Space>
-                <Divider type="vertical" />
-                <Space>
-                  <Typography.Text>{t('monitor.config.autoSend')}</Typography.Text>
-                  <Form.Item field="autoSend.enabled" triggerPropName="checked" noStyle initialValue={false}>
-                    <Switch />
-                  </Form.Item>
-                </Space>
-              </Space>
-            </div>
-          </Form.Item>
-          {editingWidget?.type === 'terminal' && (
-            <>
-              <Form.Item label={t('monitor.config.displayMode')} field="displayMode" initialValue="text">
-                <Radio.Group type="button">
-                  <Radio value="auto">{t('monitor.display.auto')}</Radio>
-                  <Radio value="text">{t('text.text')}</Radio>
-                  <Radio value="hex">{t('text.hex')}</Radio>
-                </Radio.Group>
-              </Form.Item>
-
-              {/* 自动发送配置区域 (仅当启用时显示) */}
-              <Form.Item noStyle shouldUpdate={(prev, current) => prev.autoSend?.enabled !== current.autoSend?.enabled}>
-                {(values) => {
-                  return values.autoSend?.enabled ? (
-                    <div style={{ marginBottom: 24, padding: 12, background: '#f8f9fb', borderRadius: 4 }}>
-                      <Form.Item label={t('input.encoding')} field="autoSend.encoding" initialValue="hex" style={{ marginBottom: 12 }}>
-                        <Radio.Group type="button">
-                          <Radio value="hex">Hex</Radio>
-                          <Radio value="utf8">Text</Radio>
-                        </Radio.Group>
-                      </Form.Item>
-                      <Form.Item label={t('monitor.config.sendContent')} field="autoSend.content" style={{ marginBottom: 0 }}>
-                        <Input placeholder="00 or WakeUp" />
-                      </Form.Item>
-                    </div>
-                  ) : null;
-                }}
-              </Form.Item>
-
-              <Form.Item
-                label={t('monitor.config.portField')}
-                field="portPath"
-                rules={[
-                  { required: true },
-                  {
-                    validator: (value, callback) => {
-                      const cur = String(value ?? '').trim();
-                      if (!cur) {
-                        callback();
-                        return;
-                      }
-                      const key = normalizePath(cur);
-                      const allowKey = normalizePath(editingWidget?.portPath);
-                      const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === key && p.status === 'open');
-                      if (isOpenOnServer && key !== allowKey) {
-                        callback(t('monitor.validation.portInUse'));
-                        return;
-                      }
-                      callback();
-                    }
-                  }
-                ]}
-              >
-                <Select
-                  placeholder={t('monitor.selectPort')}
-                  onFocus={() => {
-                    serial.refreshPorts(true).then((list) => {
-                      const cur = form.getFieldValue('portPath');
-                      if (!cur) return;
-                      const key = normalizePath(cur);
-                      const allowKey = normalizePath(editingWidget?.portPath);
-                      const portsList = list || serial.allPorts;
-                      const isOpenOnServer = portsList.some(p => normalizePath(p.path) === key && p.status === 'open');
-                      if (isOpenOnServer && key !== allowKey) {
-                        form.setFieldValue('portPath', undefined);
-                      }
-                    });
-                    onRefreshPorts && onRefreshPorts();
-                  }}
-                >
-                  {portList.map(port => {
-                    const currentSelectedKey = normalizePath(editingWidget?.portPath);
-                    const portKey = normalizePath(port);
-                    const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === portKey && p.status === 'open');
-                    const disabled = isOpenOnServer && portKey !== currentSelectedKey;
-                    const label = disabled ? `${port} (${t('monitor.portInUse')})` : port;
-                    return (
-                      <Select.Option key={port} value={port} disabled={disabled}>
-                        {label}
-                      </Select.Option>
-                    );
-                  })}
-                </Select>
-              </Form.Item>
-
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <Form.Item label={t('port.baudRate')} field="baudRate" initialValue={9600}>
-                    <Select>
-                      <Select.Option value={115200}>115200</Select.Option>
-                      <Select.Option value={921600}>921600</Select.Option>
-                      <Select.Option value={9600}>9600</Select.Option>
-                      <Select.Option value={19200}>19200</Select.Option>
-                      <Select.Option value={38400}>38400</Select.Option>
-                      <Select.Option value={57600}>57600</Select.Option>
-                    </Select>
-                  </Form.Item>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <Form.Item label={t('port.dataBits')} field="dataBits" initialValue={8}>
-                    <Select>
-                      <Select.Option value={8}>8</Select.Option>
-                      <Select.Option value={7}>7</Select.Option>
-                    </Select>
-                  </Form.Item>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <Form.Item label={t('port.stopBits')} field="stopBits" initialValue={1}>
-                    <Select>
-                      <Select.Option value={1}>1</Select.Option>
-                      <Select.Option value={2}>2</Select.Option>
-                    </Select>
-                  </Form.Item>
-                </div>
-                <div style={{ flex: 1 }}>
-                  <Form.Item label={t('port.parity')} field="parity" initialValue="none">
-                    <Select>
-                      <Select.Option value="none">None</Select.Option>
-                      <Select.Option value="even">Even</Select.Option>
-                      <Select.Option value="odd">Odd</Select.Option>
-                    </Select>
-                  </Form.Item>
-                </div>
-              </div>
-            </>
-          )}
-        </Form>
-      </Modal>
+        onValuesChange={handleValuesChange}
+        form={form}
+        getDefaultWidgetName={getDefaultWidgetName}
+        normalizeTitle={normalizeTitle}
+        normalizePath={normalizePath}
+      />
 
       {/* 悬浮添加按钮 */}
       {(() => {
@@ -1338,7 +1164,15 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               </Menu.Item>
             ) : (
               activeWidgets.map(w => (
-                <Menu.Item key={w.id} onClick={() => focusWidget(w.id)}>
+                <Menu.Item
+                  key={w.id}
+                  onClick={() => {
+                    zoomTo(1, window.innerWidth / 2, window.innerHeight / 2);
+                    window.setTimeout(() => {
+                      focusWidget(w.id);
+                    }, 260);
+                  }}
+                >
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span>{(w.title || '').trim() || getDefaultWidgetName(w.type)}</span>
                     <span style={{ fontSize: 12, opacity: 0.7 }}>
@@ -1351,30 +1185,40 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           </Menu>
         );
         const node = (
-          <div
-            ref={floatingActionsRef}
-            style={{
-              position: 'fixed',
-              top: floatingActionsPos?.top ?? 20,
-              right: floatingActionsPos?.right ?? 20,
-              zIndex: 2147483647,
-              transition: 'top 180ms ease, right 180ms ease',
-            }}
-          >
-            <Space>
-              <Tooltip content="活跃组件">
-                <Dropdown droplist={activeDroplist} position="bl">
-                  <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-                </Dropdown>
-              </Tooltip>
-              <Tooltip content={t('monitor.layout.export')}>
-                <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-              </Tooltip>
-              <Dropdown droplist={droplist} position='br'>
-                <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+          <>
+            <div
+              style={{
+                position: 'fixed',
+                bottom: floatingActivePos?.bottom ?? 20,
+                left: floatingActivePos?.left ?? 20,
+                zIndex: FLOATING_PORTAL_Z_INDEX,
+                transition: 'bottom 180ms ease, left 180ms ease',
+              }}
+            >
+              <Dropdown droplist={activeDroplist} position="top" trigger="hover">
+                <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
               </Dropdown>
-            </Space>
-          </div>
+            </div>
+            <div
+              ref={floatingActionsRef}
+              style={{
+                position: 'fixed',
+                top: floatingActionsPos?.top ?? 20,
+                right: floatingActionsPos?.right ?? 20,
+                zIndex: FLOATING_PORTAL_Z_INDEX,
+                transition: 'top 180ms ease, right 180ms ease',
+              }}
+            >
+              <Space>
+                <Tooltip content={t('monitor.layout.export')}>
+                  <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+                </Tooltip>
+                <Dropdown droplist={droplist} position='br'>
+                  <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+                </Dropdown>
+              </Space>
+            </div>
+          </>
         );
         return canUseDom ? createPortal(node, document.body) : node;
       })()}
@@ -1392,7 +1236,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               position: 'fixed',
               bottom: floatingZoomPos?.bottom ?? 20,
               right: floatingZoomPos?.right ?? 20,
-              zIndex: 2147483647,
+              zIndex: FLOATING_PORTAL_Z_INDEX,
               transition: 'bottom 180ms ease, right 180ms ease',
             }}
           >
