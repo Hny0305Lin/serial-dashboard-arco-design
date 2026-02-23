@@ -14,6 +14,7 @@ interface ManagedPort {
 
 export class PortManager extends EventEmitter {
   private ports: Map<string, ManagedPort> = new Map();
+  private lastErrorByPath: Map<string, string> = new Map();
 
   // 重连策略配置
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
@@ -71,6 +72,7 @@ export class PortManager extends EventEmitter {
    */
   public async open(config: SerialConfig): Promise<void> {
     const { path } = config;
+    this.lastErrorByPath.delete(path);
 
     // 如果已经存在且处于非关闭状态，直接返回或报错
     if (this.ports.has(path)) {
@@ -89,15 +91,19 @@ export class PortManager extends EventEmitter {
       await this.close(path);
     }
 
-    this.createPortInstance(config);
+    await this.createPortInstance(config);
   }
 
   /**
    * 关闭指定串口
    */
   public close(path: string): Promise<void> {
+    this.lastErrorByPath.delete(path);
     const managed = this.ports.get(path);
-    if (!managed) return Promise.resolve();
+    if (!managed) {
+      this.updateStatus(path, 'closed');
+      return Promise.resolve();
+    }
 
     // 1. 立即从管理列表中移除，防止触发自动重连逻辑
     this.ports.delete(path);
@@ -155,6 +161,10 @@ export class PortManager extends EventEmitter {
     return this.ports.get(path)?.status || 'closed';
   }
 
+  public getLastError(path: string): string | undefined {
+    return this.lastErrorByPath.get(path);
+  }
+
   /**
    * 向指定串口写入数据
    */
@@ -175,7 +185,7 @@ export class PortManager extends EventEmitter {
 
   // --- 内部私有方法 ---
 
-  private createPortInstance(config: SerialConfig) {
+  private createPortInstance(config: SerialConfig): Promise<void> {
     const { path, baudRate, dataBits = 8, stopBits = 1, parity = 'none' } = config;
 
     // 创建 SerialPort 实例
@@ -203,19 +213,28 @@ export class PortManager extends EventEmitter {
 
     // 默认启用 raw data 模式
     // 执行打开
-    port.open((err) => {
-      if (err) {
-        console.error(`Failed to open port ${path}:`, err.message);
-        this.ports.delete(path);
-        this.emit('status', { path, status: 'error', error: err.message });
-      } else {
-        // 打开成功后，尝试设置 DTR/RTS，某些设备需要这个才能发送数据
+    return new Promise((resolve, reject) => {
+      port.open((err) => {
+        if (err) {
+          console.error(`Failed to open port ${path}:`, err.message);
+          this.lastErrorByPath.set(path, err.message);
+          this.ports.delete(path);
+          this.updateStatus(path, 'error', err);
+          try { port.removeAllListeners(); } catch (e) { }
+          if ((port as any).destroy) {
+            try { (port as any).destroy(); } catch (e) { }
+          }
+          reject(err);
+          return;
+        }
+
+        this.lastErrorByPath.delete(path);
         port.set({ dtr: true, rts: true }, (err) => {
           if (err) console.warn(`[PortManager] Failed to set DTR/RTS for ${path}:`, err.message);
           else console.log(`[PortManager] DTR/RTS set for ${path}`);
         });
-      }
-      // 成功打开的状态更新交由 'open' 事件监听器处理，避免重复触发
+        resolve();
+      });
     });
   }
 
@@ -278,16 +297,14 @@ export class PortManager extends EventEmitter {
     const managed = this.ports.get(path);
     if (managed) {
       managed.status = status;
-      this.emit('status', {
-        path,
-        status,
-        error: error?.message,
-        timestamp: Date.now()
-      });
-      console.log(`[PortManager] Emitted status event: ${path} -> ${status}`);
-    } else {
-      console.error(`[PortManager] updateStatus failed: Port ${path} not found in map`);
     }
+    this.emit('status', {
+      path,
+      status,
+      error: error?.message,
+      timestamp: Date.now()
+    });
+    console.log(`[PortManager] Emitted status event: ${path} -> ${status}`);
   }
 
   private handleError(path: string, error: Error) {

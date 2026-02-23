@@ -15,7 +15,8 @@ export function createApp(portManager: PortManager) {
       // 补充当前状态信息
       const result = ports.map(p => ({
         ...p,
-        status: portManager.getStatus(p.path)
+        status: portManager.getStatus(p.path),
+        lastError: portManager.getLastError(p.path)
       }));
       res.json({ code: 0, msg: 'success', data: result });
     } catch (error: any) {

@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { IconDragDotVertical, IconClose, IconExpand, IconPlus, IconCode, IconSettings, IconThunderbolt, IconLink, IconStop, IconDownload } from '@arco-design/web-react/icon';
-import { Card, Button, Space, Typography, Empty, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message, Badge } from '@arco-design/web-react';
+import { IconPlus, IconCode, IconDownload } from '@arco-design/web-react/icon';
+import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Input, Select, Tooltip, Grid, Switch, Divider, Radio, Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
-import TerminalLogView from '../TerminalLogView';
+import TerminalWidget from './TerminalWidget';
+import { useSerialPortController } from '../../hooks/useSerialPortController';
+import { inferSerialReason } from '../../utils/serialReason';
 
 const { Row, Col } = Grid;
 
@@ -21,8 +23,44 @@ type StoredMonitorLayoutV1 = {
 export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected: boolean; portList?: string[]; onRefreshPorts?: () => void }) {
   const { t } = useTranslation();
   const { ws, wsConnected, portList = [], onRefreshPorts } = props;
+  const serial = useSerialPortController({ ws });
   const [widgets, setWidgets] = useState<MonitorWidget[]>(INITIAL_WIDGETS);
   const normalizePath = (p?: string) => (p || '').toLowerCase().replace(/^\\\\.\\/, '');
+  const normalizeTitle = (s?: string) => (s || '').trim().toLowerCase();
+  const getDefaultWidgetName = (type?: MonitorWidget['type']) => {
+    if (type === 'chart') return t('monitor.newChart');
+    if (type === 'status') return t('monitor.statusPanel');
+    return t('monitor.newTerminal');
+  };
+  const makeUniqueTitle = (base: string, used: Set<string>) => {
+    const rawBase = (base || '').trim();
+    const realBase = rawBase || t('monitor.newTerminal');
+    const baseKey = normalizeTitle(realBase);
+    if (!used.has(baseKey)) {
+      used.add(baseKey);
+      return realBase;
+    }
+    let n = 2;
+    while (true) {
+      const candidate = `${realBase} (${n})`;
+      const key = normalizeTitle(candidate);
+      if (!used.has(key)) {
+        used.add(key);
+        return candidate;
+      }
+      n += 1;
+    }
+  };
+  const ensureUniqueTerminalTitles = (list: MonitorWidget[]) => {
+    const used = new Set<string>();
+    return list.map(w => {
+      if (w.type !== 'terminal') return w;
+      const base = (w.title || '').trim() || t('monitor.newTerminal');
+      const title = makeUniqueTitle(base, used);
+      if (title === w.title) return w;
+      return { ...w, title };
+    });
+  };
 
   // 注入样式
   useEffect(() => {
@@ -59,6 +97,26 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const lastPersistRef = useRef<string>('');
   const saveTimerRef = useRef<number | null>(null);
   const restorePromptShownRef = useRef(false);
+  const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
+
+  const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
+    const list = await serial.refreshPorts(true);
+    const portsList = list || serial.allPorts;
+    const statusMap: Record<string, { status: string; lastError?: string }> = {};
+    portsList.forEach(p => {
+      statusMap[normalizePath(p.path)] = { status: p.status, lastError: p.lastError };
+    });
+    setWidgets(prev => {
+      const base = seed || prev;
+      const next = base.map(w => {
+        if (!w.portPath) return w;
+        const status = statusMap[normalizePath(w.portPath)]?.status || 'closed';
+        if (status === 'open') return { ...w, isConnected: true };
+        return { ...w, isConnected: false };
+      });
+      return seed ? next : next;
+    });
+  };
 
   const sanitizeWidgetForStorage = (w: MonitorWidget): StoredMonitorWidgetV1 => ({
     id: w.id,
@@ -98,8 +156,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       title: w.title || t('monitor.newTerminal'),
       x: typeof w.x === 'number' ? w.x : 0,
       y: typeof w.y === 'number' ? w.y : 0,
-      width: typeof w.width === 'number' ? w.width : 400,
-      height: typeof w.height === 'number' ? w.height : 300,
+      width: typeof w.width === 'number' ? w.width : 640,
+      height: typeof w.height === 'number' ? w.height : 480,
       zIndex: typeof w.zIndex === 'number' ? w.zIndex : 1,
       portPath: w.portPath,
       baudRate: w.baudRate || 9600,
@@ -149,8 +207,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         const nextCanvas = parsed?.canvasState && typeof parsed.canvasState === 'object' ? parsed.canvasState : defaultCanvasState;
         const nextWidgets = parsed?.widgets ? parsed.widgets.map(hydrateWidgetFromStorage) : [];
         setCanvasState(nextCanvas);
-        setWidgets(nextWidgets);
+        const fixedWidgets = ensureUniqueTerminalTitles(nextWidgets);
+        setWidgets(fixedWidgets);
         setRestoreChecked(true);
+        setTimeout(() => {
+          syncConnectionsFromServer(fixedWidgets);
+        }, 0);
       },
       onCancel: () => {
         localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
@@ -211,13 +273,28 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
         // 监听串口状态变更，同步更新 isConnected 状态
         if (msg.type === 'serial:status') {
-          const { path, status } = msg;
+          const { path, status, error } = msg;
           const msgPath = normalizePath(path);
 
           setWidgets(prev => prev.map(w => {
             const widgetPath = normalizePath(w.portPath);
             if (widgetPath === msgPath) {
-              return { ...w, isConnected: status === 'open' };
+              const connected = status === 'open';
+              let next = w;
+              if (w.isConnected !== connected) {
+                next = { ...next, isConnected: connected };
+              }
+              if (status === 'error' && error) {
+                const reason = inferSerialReason(String(error));
+                const prevErr = lastStatusErrorByPathRef.current[msgPath];
+                if (prevErr !== String(error)) {
+                  lastStatusErrorByPathRef.current[msgPath] = String(error);
+                  Message.error(`${path} 无法连接：${reason}`);
+                }
+                const newLogs = [...(next.logs || []), `[System] ${path} 无法连接：${reason}`].slice(-500);
+                next = { ...next, logs: newLogs };
+              }
+              return next;
             }
             return w;
           }));
@@ -286,6 +363,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
             const widgetPath = normalizePath(w.portPath);
 
             if (w.type === 'terminal' && widgetPath === msgPath) {
+              if (!w.isConnected) return w;
               const mode = w.displayMode || 'text';
               const payload =
                 mode === 'hex' ? hexContent :
@@ -316,6 +394,20 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const [removingIds, setRemovingIds] = useState<Record<string, true>>({});
   const [form] = Form.useForm();
 
+  useEffect(() => {
+    if (!editingWidget) return;
+    setIsDragging(false);
+    setDraggedWidgetId(null);
+    setResizingWidgetId(null);
+    setResizeStart(null);
+  }, [editingWidget]);
+
+  const openWidgetConfig = useCallback((widget: MonitorWidget) => {
+    setEditingWidget(widget);
+    form.resetFields();
+    form.setFieldsValue(widget);
+  }, [form]);
+
   const updateWidgetById = useCallback((id: string, updater: (w: MonitorWidget) => MonitorWidget) => {
     setWidgets(prev => {
       const idx = prev.findIndex(w => w.id === id);
@@ -340,6 +432,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // 只有点击左键且不是在组件上点击时才触发
+    if (editingWidget) return;
     if (e.button !== 0) return;
 
     setIsDragging(true);
@@ -347,6 +440,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleWidgetMouseDown = (e: React.MouseEvent, id: string) => {
+    if (editingWidget) return;
     if (e.button !== 0) return;
     e.stopPropagation();
     bringToFront(id);
@@ -359,8 +453,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     setWidgets(prev => {
       // 智能布局：寻找一个不重叠的位置
       // 算法：从当前视野中心开始，向外螺旋寻找空闲区域
-      const W = 400;
-      const H = 300;
+      const W = 640;
+      const H = 480;
 
       // 当前视野的中心点 (相对于画布原点)
       // 注意：offsetX 是画布相对于视口的偏移，所以视口坐标 = 组件坐标 + offsetX
@@ -413,10 +507,16 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         if (found) break;
       }
 
+      const usedTitles = new Set<string>();
+      prev.forEach(w => {
+        if (w.type === 'terminal') usedTitles.add(normalizeTitle(w.title));
+      });
+      const baseTitle = getDefaultWidgetName(type);
+      const newTitle = type === 'terminal' ? makeUniqueTitle(baseTitle, usedTitles) : baseTitle;
       const newWidget: MonitorWidget = {
         id: Date.now().toString(),
         type,
-        title: t('monitor.newTerminal'),
+        title: newTitle,
         x: bestX,
         y: bestY,
         width: W,
@@ -437,11 +537,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       // 创建后直接打开编辑弹窗
       setTimeout(() => {
-        setEditingWidget(newWidget);
-        form.setFieldsValue({
-          ...newWidget,
-          showSubtitle: true // 显式设置表单初始值
-        });
+        openWidgetConfig(newWidget);
       }, 100);
 
       return [...prev, newWidget];
@@ -462,8 +558,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     try {
       const values = await form.validate();
       if (editingWidget) {
+        const nextValues: any = { ...values };
+        if (typeof nextValues.title === 'string') {
+          nextValues.title = nextValues.title.trim();
+        }
         setWidgets(prev => prev.map(w =>
-          w.id === editingWidget.id ? { ...w, ...values } : w
+          w.id === editingWidget.id ? { ...w, ...nextValues } : w
         ));
         setEditingWidget(null);
       }
@@ -538,7 +638,6 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     }
 
     const isConnected = widget.isConnected;
-    const url = isConnected ? 'http://localhost:3001/api/ports/close' : 'http://localhost:3001/api/ports/open';
     const payload = isConnected
       ? { path: widget.portPath }
       : {
@@ -550,23 +649,25 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       };
 
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (json.code === 0) {
-        Message.success(isConnected ? t('msg.closeSuccess') : t('msg.openSuccess'));
-        // 更新组件状态
-        setWidgets(prev => prev.map(w =>
-          w.id === widget.id ? { ...w, isConnected: !isConnected } : w
-        ));
+      if (isConnected) {
+        Message.info('正在断开...');
+        await serial.closePort(widget.portPath);
+        Message.success(`${widget.portPath} 已断开`);
       } else {
-        Message.error(json.msg);
+        Message.info('正在连接...');
+        await serial.openPort(payload as any);
+        Message.success(`${widget.portPath} 已连接`);
       }
+      await syncConnectionsFromServer();
     } catch (e) {
-      Message.error('Connection toggle failed');
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!isConnected) {
+        const reason = inferSerialReason(msg);
+        Message.error(`${widget.portPath} 无法连接：${reason || msg || '连接失败'}`);
+      } else {
+        Message.error(msg || '断开失败');
+      }
+      await syncConnectionsFromServer();
     }
   };
 
@@ -606,6 +707,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleResizeMouseDown = (e: React.MouseEvent, id: string, width: number, height: number) => {
+    if (editingWidget) return;
     if (e.button !== 0) return;
     e.stopPropagation();
     // 不要调用 bringToFront(id)，否则会导致 React 重新排序 DOM，打断 Resize 过程
@@ -621,6 +723,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   // 全局鼠标事件监听
   useEffect(() => {
     const onGlobalMove = (e: MouseEvent) => {
+      if (editingWidget) return;
       // 使用 requestAnimationFrame 节流渲染
       if (rafRef.current) return;
 
@@ -673,7 +776,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       window.removeEventListener('mousemove', onGlobalMove);
       window.removeEventListener('mouseup', onGlobalUp);
     };
-  }, [isDragging, draggedWidgetId, resizingWidgetId, resizeStart, canvasState.scale]);
+  }, [isDragging, draggedWidgetId, resizingWidgetId, resizeStart, canvasState.scale, editingWidget, updateWidgetById]);
 
   // 网格背景样式
   const gridStyle: React.CSSProperties = {
@@ -741,7 +844,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       {/* 编辑弹窗 */}
       <Modal
-        title={t('monitor.config.title')}
+        title={t('monitor.config.modalTitle', { name: (editingWidget?.title || '').trim() || getDefaultWidgetName(editingWidget?.type) })}
         visible={!!editingWidget}
         onOk={handleSaveWidget}
         onCancel={() => setEditingWidget(null)}
@@ -752,7 +855,32 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           <Form.Item label={t('monitor.config.titleField')} required>
             <div style={{ display: 'flex', gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <Form.Item field="title" rules={[{ required: true }]} noStyle>
+                <Form.Item
+                  field="title"
+                  rules={[
+                    {
+                      validator: (value, callback) => {
+                        const title = String(value ?? '').trim();
+                        if (!title) {
+                          callback(t('monitor.validation.titleRequired'));
+                          return;
+                        }
+                        if (!/[\p{L}\p{N}]/u.test(title)) {
+                          callback(t('monitor.validation.titleInvalid'));
+                          return;
+                        }
+                        const key = normalizeTitle(title);
+                        const dup = widgets.some(w => w.type === 'terminal' && normalizeTitle(w.title) === key && w.id !== editingWidget?.id);
+                        if (dup) {
+                          callback(t('monitor.validation.titleDuplicate'));
+                          return;
+                        }
+                        callback();
+                      }
+                    }
+                  ]}
+                  noStyle
+                >
                   <Input placeholder={t('monitor.config.titlePlaceholder')} />
                 </Form.Item>
               </div>
@@ -809,14 +937,59 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
                 }}
               </Form.Item>
 
-              <Form.Item label={t('monitor.config.portField')} field="portPath" rules={[{ required: true }]}>
+              <Form.Item
+                label={t('monitor.config.portField')}
+                field="portPath"
+                rules={[
+                  { required: true },
+                  {
+                    validator: (value, callback) => {
+                      const cur = String(value ?? '').trim();
+                      if (!cur) {
+                        callback();
+                        return;
+                      }
+                      const key = normalizePath(cur);
+                      const allowKey = normalizePath(editingWidget?.portPath);
+                      const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === key && p.status === 'open');
+                      if (isOpenOnServer && key !== allowKey) {
+                        callback(t('monitor.validation.portInUse'));
+                        return;
+                      }
+                      callback();
+                    }
+                  }
+                ]}
+              >
                 <Select
                   placeholder={t('monitor.selectPort')}
-                  onFocus={() => onRefreshPorts && onRefreshPorts()}
+                  onFocus={() => {
+                    serial.refreshPorts(true).then((list) => {
+                      const cur = form.getFieldValue('portPath');
+                      if (!cur) return;
+                      const key = normalizePath(cur);
+                      const allowKey = normalizePath(editingWidget?.portPath);
+                      const portsList = list || serial.allPorts;
+                      const isOpenOnServer = portsList.some(p => normalizePath(p.path) === key && p.status === 'open');
+                      if (isOpenOnServer && key !== allowKey) {
+                        form.setFieldValue('portPath', undefined);
+                      }
+                    });
+                    onRefreshPorts && onRefreshPorts();
+                  }}
                 >
-                  {portList.map(port => (
-                    <Select.Option key={port} value={port}>{port}</Select.Option>
-                  ))}
+                  {portList.map(port => {
+                    const currentSelectedKey = normalizePath(editingWidget?.portPath);
+                    const portKey = normalizePath(port);
+                    const isOpenOnServer = serial.allPorts.some(p => normalizePath(p.path) === portKey && p.status === 'open');
+                    const disabled = isOpenOnServer && portKey !== currentSelectedKey;
+                    const label = disabled ? `${port} (${t('monitor.portInUse')})` : port;
+                    return (
+                      <Select.Option key={port} value={port} disabled={disabled}>
+                        {label}
+                      </Select.Option>
+                    );
+                  })}
                 </Select>
               </Form.Item>
 
@@ -881,135 +1054,24 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       {/* 渲染循环 */}
       {widgets.map(widget => (
-        <div
-          key={widget.id}
-          className="monitor-widget"
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            width: widget.width,
-            height: widget.height,
-            zIndex: widget.zIndex,
-            backgroundColor: '#fff',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-            borderRadius: '4px',
-            border: '1px solid #e5e6eb',
-            display: 'flex',
-            flexDirection: 'column',
-            opacity: removingIds[widget.id] ? 0 : appearingIds[widget.id] ? 0 : 1,
-            transform: `translate3d(${widget.x + canvasState.offsetX}px, ${widget.y + canvasState.offsetY}px, 0) scale(${(removingIds[widget.id] || appearingIds[widget.id]) ? 0.98 : 1})`,
-            transition: (draggedWidgetId === widget.id || resizingWidgetId === widget.id || isDragging) ? 'none' : 'opacity 160ms ease, transform 160ms ease, box-shadow 0.2s',
-          }}
-          // 点击组件时置顶，并阻止事件冒泡（防止触发画布拖拽）
-          onMouseDown={(e) => handleWidgetMouseDown(e, widget.id)}
-        >
-          {/* 组件标题栏 */}
-          <div style={{
-            padding: '8px 12px',
-            borderBottom: '1px solid #f0f0f0',
-            background: '#fafafa',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            cursor: 'default',
-            borderTopLeftRadius: '4px',
-            borderTopRightRadius: '4px'
-          }}>
-            <Space>
-              <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
-
-              <Tooltip content={widget.portPath || t('monitor.noPort')}>
-                <div
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline' }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEditingWidget(widget);
-                    form.setFieldsValue(widget);
-                  }}
-                >
-                  <Typography.Text bold>{widget.title}</Typography.Text>
-                  {widget.showSubtitle && widget.subtitle && (
-                    <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-                      {widget.subtitle}
-                    </Typography.Text>
-                  )}
-                </div>
-              </Tooltip>
-            </Space>
-            <Space>
-              {/* 连接开关 */}
-              <Tooltip content={widget.isConnected ? t('monitor.disconnect') : t('monitor.connect')}>
-                <Button
-                  type={widget.isConnected ? 'primary' : 'secondary'}
-                  status={widget.isConnected ? 'success' : 'default'}
-                  size="mini"
-                  icon={widget.isConnected ? <IconLink /> : <IconStop />}
-                  onClick={(e) => handleToggleConnection(e as any, widget)}
-                />
-              </Tooltip>
-
-              {/* 手动唤醒按钮 */}
-              {widget.autoSend?.enabled && (
-                <Tooltip content={t('monitor.manualSend')}>
-                  <Button
-                    type="text"
-                    size="mini"
-                    icon={<IconThunderbolt />}
-                    onClick={(e) => handleManualSend(e as any, widget)}
-                  />
-                </Tooltip>
-              )}
-              <Button
-                type="text"
-                size="mini"
-                icon={<IconSettings />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditingWidget(widget);
-                  form.setFieldsValue(widget);
-                }}
-              />
-              <Button
-                type="text"
-                size="mini"
-                status="danger"
-                icon={<IconClose />}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRemoveWidget(widget.id);
-                }}
-              />
-            </Space>
-          </div>
-
-          {/* 组件内容区 */}
-          <div style={{ flex: 1, padding: 12, overflow: 'auto', position: 'relative' }}>
-            {widget.type === 'terminal' && (
-              <TerminalLogView logs={widget.logs || []} emptyText={t('panel.noLogs')} height="100%" />
-            )}
-          </div>
-
-          {/* 调整大小手柄 */}
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 0,
-              right: 0,
-              width: 16,
-              height: 16,
-              cursor: 'nwse-resize',
-              zIndex: 10
-            }}
-            onMouseDown={(e) => {
-              handleResizeMouseDown(e, widget.id, widget.width, widget.height);
-            }}
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#86909c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v6h-6" />
-            </svg>
-          </div>
-        </div>
+        widget.type === 'terminal' ? (
+          <TerminalWidget
+            key={widget.id}
+            widget={widget}
+            canvasState={canvasState}
+            isDragging={isDragging}
+            draggedWidgetId={draggedWidgetId}
+            resizingWidgetId={resizingWidgetId}
+            appearing={!!appearingIds[widget.id]}
+            removing={!!removingIds[widget.id]}
+            onMouseDown={handleWidgetMouseDown}
+            onToggleConnection={(e, w) => handleToggleConnection(e as any, w)}
+            onManualSend={(e, w) => handleManualSend(e as any, w)}
+            onOpenConfig={openWidgetConfig}
+            onRemove={handleRemoveWidget}
+            onResizeMouseDown={handleResizeMouseDown}
+          />
+        ) : null
       ))}
     </div>
   );

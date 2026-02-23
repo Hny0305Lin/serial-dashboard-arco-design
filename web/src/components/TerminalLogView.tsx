@@ -1,12 +1,24 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Empty } from '@arco-design/web-react';
 
 export default function TerminalLogView(props: { logs: string[]; emptyText: string; height: number | string }) {
   const { logs, emptyText, height } = props;
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      const next = containerRef.current;
+      if (!next) return;
+      next.scrollTop = next.scrollHeight;
+    });
+  }, [logs.length]);
 
   return (
     <div
       className="no-scrollbar"
+      ref={containerRef}
       style={{
         height,
         background: '#1e1e1e',
@@ -57,4 +69,3 @@ export default function TerminalLogView(props: { logs: string[]; emptyText: stri
     </div>
   );
 }
-

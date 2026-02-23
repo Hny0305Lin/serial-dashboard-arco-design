@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Layout,
   Breadcrumb,
@@ -38,6 +38,7 @@ import type { SerialFilterConfig } from './Settings';
 import DashboardHome from './DashboardHome';
 import MonitorCanvas from './Monitor/MonitorCanvas';
 import type { PortInfo } from '../types';
+import { useSerialPortController } from '../hooks/useSerialPortController';
 
 import LogSavePage from './LogSavePage';
 
@@ -54,6 +55,23 @@ interface AutoSendConfig {
   encoding: 'hex' | 'utf8';
 }
 
+class MonitorErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 16 }}>
+          <Typography.Text type="error">Monitor crashed: {this.state.error.message}</Typography.Text>
+        </div>
+      );
+    }
+    return this.props.children as any;
+  }
+}
+
 function AppContent() {
   const { t, i18n } = useTranslation();
   const history = useHistory();
@@ -66,9 +84,7 @@ function AppContent() {
   const prevCollapsedRef = useRef<boolean | null>(null);
   const immersiveActiveRef = useRef(false);
   const [currentMenu, setCurrentMenu] = useState('1-1');
-  const [allPorts, setAllPorts] = useState<PortInfo[]>([]); // 原始端口数据
   const [ports, setPorts] = useState<PortInfo[]>([]); // 过滤后的端口数据
-  const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
   const [form] = Form.useForm();
   const [logs, setLogs] = useState<string[]>([]);
@@ -86,6 +102,24 @@ function AppContent() {
   });
   const [sending, setSending] = useState(false);
 
+  const serial = useSerialPortController({ ws });
+  const allPorts = serial.allPorts;
+  const loading = serial.loading;
+  const fetchPorts = useCallback(async (silent = false) => {
+    const list = await serial.refreshPorts(silent);
+    if (list) {
+      if (!silent) {
+        Message.success(t('msg.refreshSuccess'));
+      }
+      const firstOpen = list.find((p: PortInfo) => p.status === 'open');
+      if (firstOpen && !sendPath) {
+        setSendPath(firstOpen.path);
+      }
+    } else {
+      if (!silent) Message.error(t('msg.fetchFailed'));
+    }
+  }, [serial, t, sendPath]);
+
   useEffect(() => {
     localStorage.setItem('sendEncoding', sendEncoding);
   }, [sendEncoding]);
@@ -95,14 +129,14 @@ function AppContent() {
     const path = location.pathname;
     if (path === '/settings') {
       setCurrentMenu('3');
-    } else if (path === '/monitor') {
+    } else if (path.startsWith('/monitor')) {
       setCurrentMenu('1-2');
     } else {
       setCurrentMenu('1-1');
     }
   }, [location]);
 
-  const isMonitor = location.pathname === '/monitor';
+  const isMonitor = location.pathname.startsWith('/monitor');
 
   useEffect(() => {
     const computeFullscreen = () => {
@@ -198,32 +232,6 @@ function AppContent() {
   const activePortsCount = ports.filter(p => p.status === 'open').length;
   const totalPortsCount = ports.length;
 
-  const fetchPorts = async (silent = false) => {
-    setLoading(true);
-    try {
-      const res = await fetch('http://localhost:3001/api/ports');
-      const json = await res.json();
-      if (json.code === 0) {
-        setAllPorts(json.data);
-        if (!silent) {
-          Message.success(t('msg.refreshSuccess'));
-        }
-        // 如果当前没有选中的发送端口，且有打开的端口，则选中第一个
-        const firstOpen = json.data.find((p: PortInfo) => p.status === 'open');
-        if (firstOpen && !sendPath) {
-          setSendPath(firstOpen.path);
-        }
-      } else {
-        if (!silent) Message.error(json.msg);
-      }
-    } catch (e) {
-      console.error('Fetch ports failed:', e);
-      if (!silent) Message.error(t('msg.fetchFailed'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const decoderRef = useRef<TextDecoder>(new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }));
   // 使用 ref 来避免闭包陷阱和重复连接
   const wsRef = useRef<WebSocket | null>(null);
@@ -239,7 +247,7 @@ function AppContent() {
 
   useEffect(() => {
     // 初始加载列表
-    // fetchPorts(true);
+    fetchPorts(true);
 
     // Setup WebSocket
     if (wsRef.current) {
@@ -379,61 +387,47 @@ function AppContent() {
   const handleOpen = async () => {
     try {
       const values = await form.validate();
-      const res = await fetch('http://localhost:3001/api/ports/open', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      const json = await res.json();
-      if (json.code === 0) {
-        Message.success(t('msg.openSuccess'));
-        setVisible(false);
-        setSendPath(values.path);
-        fetchPorts(true);
+      Message.info('正在连接...');
+      await serial.openPort(values);
+      Message.success(t('msg.openSuccess'));
+      setVisible(false);
+      setSendPath(values.path);
+      serial.refreshPorts(true);
 
-        // 自动发送逻辑
-        if (autoSend.enabled && autoSend.content) {
-          try {
-            await fetch('http://localhost:3001/api/ports/write', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                path: values.path,
-                data: autoSend.content,
-                encoding: autoSend.encoding
-              }),
-            });
-            setLogs(prev => [`[${values.path}-Auto] ${autoSend.content}`, ...prev].slice(0, 200));
-            setTxCount(prev => prev + 1);
-          } catch (err) {
-            console.error('Auto-Send failed', err);
-            Message.warning('Auto-Send failed');
-          }
+      // 自动发送逻辑
+      if (autoSend.enabled && autoSend.content) {
+        try {
+          await fetch('http://localhost:3001/api/ports/write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              path: values.path,
+              data: autoSend.content,
+              encoding: autoSend.encoding
+            }),
+          });
+          setLogs(prev => [`[${values.path}-Auto] ${autoSend.content}`, ...prev].slice(0, 200));
+          setTxCount(prev => prev + 1);
+        } catch (err) {
+          console.error('Auto-Send failed', err);
+          Message.warning('Auto-Send failed');
         }
-      } else {
-        Message.error(json.msg);
       }
     } catch (e) {
-      console.error(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      Message.error(msg);
     }
   };
 
   const handleClose = async (path: string) => {
     try {
-      const res = await fetch('http://localhost:3001/api/ports/close', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      });
-      const json = await res.json();
-      if (json.code === 0) {
-        Message.success(t('msg.closeSuccess'));
-        fetchPorts(true);
-      } else {
-        Message.error(json.msg);
-      }
+      Message.info('正在断开...');
+      await serial.closePort(path);
+      Message.success(t('msg.closeSuccess'));
+      serial.refreshPorts(true);
     } catch (e) {
-      Message.error('Failed to close port');
+      const msg = e instanceof Error ? e.message : String(e);
+      Message.error(msg || 'Failed to close port');
     }
   };
 
@@ -623,7 +617,7 @@ function AppContent() {
             </Header>
           )}
 
-          <Content style={isMonitor ? { padding: 0, overflow: 'hidden' } : { padding: '16px 24px' }}>
+          <Content style={isMonitor ? { padding: 0, overflow: 'hidden', height: headerHidden ? '100vh' : 'calc(100vh - 64px)', flex: 1 } : { padding: '16px 24px' }}>
             <Switch>
               <Route path="/settings">
                 <Settings
@@ -636,12 +630,14 @@ function AppContent() {
                 />
               </Route>
               <Route path="/monitor">
-                <MonitorCanvas
-                  ws={ws}
-                  wsConnected={wsConnected}
-                  portList={ports.map(p => p.path)}
-                  onRefreshPorts={() => fetchPorts(true)}
-                />
+                <MonitorErrorBoundary>
+                  <MonitorCanvas
+                    ws={ws}
+                    wsConnected={wsConnected}
+                    portList={ports.map(p => p.path)}
+                    onRefreshPorts={() => fetchPorts(true)}
+                  />
+                </MonitorErrorBoundary>
               </Route>
               <Route path="/save-logs">
                 <LogSavePage currentLogs={logs} />
