@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { PortManager } from '../core/PortManager';
 import { Server } from 'http';
+import { ForwardingService } from '../services/ForwardingService';
 
 interface WsMessage {
   type: string;
@@ -8,7 +9,7 @@ interface WsMessage {
   [key: string]: any;
 }
 
-export function createWsServer(server: Server, portManager: PortManager) {
+export function createWsServer(server: Server, portManager: PortManager, forwarding?: ForwardingService) {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
   // 广播函数
@@ -69,8 +70,37 @@ export function createWsServer(server: Server, portManager: PortManager) {
     });
   });
 
+  let forwardingUnsub: (() => void) | null = null;
+  let forwardingAlertUnsub: (() => void) | null = null;
+  let forwardingBroadcastTimer: NodeJS.Timeout | null = null;
+  let pendingForwardingSnapshot: any | null = null;
+
+  const scheduleForwardingBroadcast = () => {
+    if (!pendingForwardingSnapshot) return;
+    if (forwardingBroadcastTimer) return;
+    forwardingBroadcastTimer = setTimeout(() => {
+      forwardingBroadcastTimer = null;
+      if (!pendingForwardingSnapshot) return;
+      broadcast({ type: 'forwarding:metrics', data: pendingForwardingSnapshot });
+      pendingForwardingSnapshot = null;
+    }, 300);
+  };
+
+  if (forwarding) {
+    forwardingUnsub = forwarding.onMetrics((snap) => {
+      pendingForwardingSnapshot = snap;
+      scheduleForwardingBroadcast();
+    });
+    forwardingAlertUnsub = forwarding.onAlert((alert) => {
+      broadcast({ type: 'forwarding:alert', data: alert });
+    });
+  }
+
   wss.on('connection', (ws) => {
     console.log('Client connected');
+    if (forwarding) {
+      ws.send(JSON.stringify({ type: 'forwarding:metrics', data: forwarding.getMetricsSnapshot() }));
+    }
 
     ws.on('message', (message) => {
       try {
@@ -116,6 +146,12 @@ export function createWsServer(server: Server, portManager: PortManager) {
     ws.on('close', () => {
       console.log('Client disconnected');
     });
+  });
+
+  wss.on('close', () => {
+    if (forwardingUnsub) forwardingUnsub();
+    if (forwardingAlertUnsub) forwardingAlertUnsub();
+    if (forwardingBroadcastTimer) clearTimeout(forwardingBroadcastTimer);
   });
 
   return wss;

@@ -4,14 +4,23 @@ import { createApp } from './api/app';
 import { createWsServer } from './api/ws';
 import { PortManager } from './core/PortManager';
 import cors from 'cors';
+import path from 'path';
+import { ForwardingService } from './services/ForwardingService';
 
 const PORT = 3001;
 
 async function main() {
   const portManager = new PortManager();
+  const dataDir = (process.env.DATA_DIR && String(process.env.DATA_DIR).trim()) || path.join(process.cwd(), 'data');
+  const forwarding = new ForwardingService({
+    portManager,
+    configPath: path.join(dataDir, 'forwarding.config.json'),
+    dataDir
+  });
+  await forwarding.init();
   
   // 初始化 Express 应用
-  const app = createApp(portManager);
+  const app = createApp(portManager, forwarding);
   
   // 使用 /api 前缀挂载路由
   // createApp 返回的是 express() 实例，可以直接作为子应用挂载
@@ -23,7 +32,7 @@ async function main() {
   const server = http.createServer(mainApp);
   
   // 创建 WebSocket 服务器
-  const wss = createWsServer(server, portManager);
+  const wss = createWsServer(server, portManager, forwarding);
 
   // 监听端口
   server.listen(PORT, () => {
@@ -39,6 +48,7 @@ async function main() {
     for (const port of ports) {
       await portManager.close(port.path);
     }
+    await forwarding.shutdown();
     server.close(() => {
       console.log('Server stopped');
       process.exit(0);

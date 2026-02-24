@@ -1,8 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import { PortManager } from '../core/PortManager';
+import { ForwardingService } from '../services/ForwardingService';
 
-export function createApp(portManager: PortManager) {
+export function createApp(portManager: PortManager, forwarding?: ForwardingService) {
   const app = express();
 
   app.use(cors());
@@ -83,6 +84,62 @@ export function createApp(portManager: PortManager) {
     } catch (error: any) {
       res.status(500).json({ code: 500, msg: error.message });
     }
+  });
+
+  app.get('/forwarding/config', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    res.json({ code: 0, msg: 'success', data: forwarding.getConfig() });
+  });
+
+  app.put('/forwarding/config', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    const next = req.body;
+    if (!next || typeof next !== 'object') return res.status(400).json({ code: 400, msg: 'Invalid config' });
+    try {
+      await forwarding.setConfig(next);
+      res.json({ code: 0, msg: 'success', data: forwarding.getConfig() });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
+  app.post('/forwarding/channels', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    try {
+      const { ownerWidgetId, name } = req.body || {};
+      const created = await forwarding.createChannel({ ownerWidgetId, name });
+      res.json({ code: 0, msg: 'success', data: created });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
+  app.post('/forwarding/enabled', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    const enabled = !!req.body?.enabled;
+    try {
+      await forwarding.setEnabled(enabled);
+      res.json({ code: 0, msg: 'success', data: { enabled: forwarding.getConfig().enabled } });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
+  app.get('/forwarding/metrics', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    res.json({ code: 0, msg: 'success', data: forwarding.getMetricsSnapshot() });
+  });
+
+  app.get('/forwarding/records', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 2000));
+    res.json({ code: 0, msg: 'success', data: forwarding.getRecentRecords(limit) });
+  });
+
+  app.get('/forwarding/logs', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 2000));
+    res.json({ code: 0, msg: 'success', data: forwarding.getRecentLogs(limit) });
   });
 
   return app;

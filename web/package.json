@@ -19,6 +19,7 @@
     "@arco-design/web-react": "^2.66.10",
     "@arco-materials/pro-radio": "^1.0.1",
     "@arco-materials/select-with-check-all": "^1.0.4",
+    "@astrojs/check": "^0.9.6",
     "@astrojs/react": "^4.4.2",
     "@types/nprogress": "^0.2.3",
     "astro": "^5.17.3",

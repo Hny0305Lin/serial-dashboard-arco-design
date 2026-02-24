@@ -1,7 +1,7 @@
 // 监控组件的基础定义
 export interface MonitorWidget {
   id: string;
-  type: 'terminal' | 'chart' | 'status' | 'clock'; // 组件类型，未来可扩展
+  type: 'terminal' | 'chart' | 'status' | 'clock' | 'forwarding'; // 组件类型，未来可扩展
   title: string;
 
   // 空间属性 (绝对定位)
@@ -34,6 +34,8 @@ export interface MonitorWidget {
   displayMode?: 'auto' | 'text' | 'hex';
 
   clockSource?: 'local' | 'beijing';
+
+  forwardingChannelId?: string;
 
   logs?: string[];   // 终端日志缓存 (新增)
   isConnected?: boolean; // 串口连接状态

@@ -250,18 +250,20 @@ export class PortManager extends EventEmitter {
       managed.reconnectAttempts = 0;
       this.updateStatus(path, 'open');
 
-      // 🔍 调试探针：发送一条测试数据证明管道通畅
-      // 这条数据不是来自串口，而是后端模拟的，用于验证 WS 链路
-      setTimeout(() => {
-        const testMsg = Buffer.from(`[System] Port ${path} opened. Pipeline check OK.`);
-        this.emit('data', { path, data: testMsg });
-      }, 500);
+      if (process.env.SERIAL_PIPELINE_PROBE === '1') {
+        setTimeout(() => {
+          const testMsg = Buffer.from(`[System] Port ${path} opened. Pipeline check OK.`);
+          this.emit('data', { path, data: testMsg });
+        }, 500);
+      }
     });
 
     instance.on('readable', () => {
       let chunk: Buffer | null;
       while ((chunk = instance.read()) !== null) {
-        console.log(`[PortManager] RAW DATA from ${path} (Length: ${chunk.length}):`, chunk.toString('hex').toUpperCase());
+        if (process.env.SERIAL_RAW_LOG === '1') {
+          console.log(`[PortManager] RAW DATA from ${path} (Length: ${chunk.length}):`, chunk.toString('hex').toUpperCase());
+        }
         this.emit('data', { path, data: chunk });
       }
     });

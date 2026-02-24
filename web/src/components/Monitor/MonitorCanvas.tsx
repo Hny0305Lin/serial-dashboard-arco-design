@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { MonitorWidget, CanvasState } from './types';
 import TerminalWidget from './TerminalWidget';
 import ClockWidget from './ClockWidget';
+import ForwardingWidget from './ForwardingWidget';
 import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { inferSerialReason } from '../../utils/serialReason';
@@ -35,6 +36,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     if (type === 'clock') return t('monitor.newClock');
     if (type === 'chart') return t('monitor.newChart');
     if (type === 'status') return t('monitor.statusPanel');
+    if (type === 'forwarding') return t('monitor.newForwarding');
     return t('monitor.newTerminal');
   };
   const makeUniqueTitle = (base: string, used: Set<string>) => {
@@ -109,6 +111,50 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         border-color: transparent !important;
         box-shadow: none !important;
       }
+      .forwarding-channel-card {
+        transition: transform 0.12s ease, box-shadow 0.12s ease;
+      }
+      .forwarding-channel-card:hover {
+        transform: translateY(-2px);
+      }
+      .forwarding-channels-strip {
+        display: flex;
+        gap: 10px;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 2px;
+        cursor: grab;
+        user-select: none;
+        touch-action: pan-y;
+      }
+      .forwarding-channels-strip:active {
+        cursor: grabbing;
+      }
+      .forwarding-channels-strip::-webkit-scrollbar {
+        display: none;
+      }
+      .forwarding-channels-strip {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      .forwarding-channel-card {
+        flex: 0 0 auto;
+      }
+      .forwarding-settings-modal {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      .forwarding-settings-modal::-webkit-scrollbar {
+        display: none;
+      }
+      .forwarding-settings-modal .arco-modal-body {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      .forwarding-settings-modal .arco-modal-body::-webkit-scrollbar {
+        display: none;
+      }
       @keyframes terminal-rx-breathe {
         0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 180, 42, 0.45); }
         50% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(0, 180, 42, 0); }
@@ -123,17 +169,25 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const defaultCanvasState: CanvasState = { offsetX: 0, offsetY: 0, scale: 1 };
   const [canvasState, setCanvasState] = useState<CanvasState>(defaultCanvasState);
   const [isDragging, setIsDragging] = useState(false);
+  const [uiLocked, setUiLocked] = useState(false);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [resizingWidgetId, setResizingWidgetId] = useState<string | null>(null);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const lastMousePos = useRef({ x: 0, y: 0 });
+  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const dragMovedRef = useRef(false);
   const decoderRef = useRef<TextDecoder>(new TextDecoder('utf-8', { fatal: false, ignoreBOM: true }));
   const [restoreChecked, setRestoreChecked] = useState(false);
   const lastPersistRef = useRef<string>('');
   const saveTimerRef = useRef<number | null>(null);
   const restorePromptShownRef = useRef(false);
+  const importPromptDismissedRef = useRef(false);
+  const layoutFileInputRef = useRef<HTMLInputElement | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressTriggeredRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const [forwardingMetrics, setForwardingMetrics] = useState<any | null>(null);
 
   useEffect(() => {
     const t = window.setInterval(() => setNowTs(Date.now()), 1000);
@@ -177,7 +231,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     showSubtitle: w.showSubtitle,
     autoSend: w.autoSend,
     displayMode: w.displayMode,
-    clockSource: w.clockSource
+    clockSource: w.clockSource,
+    forwardingChannelId: w.forwardingChannelId
   });
 
   const hydrateWidgetFromStorage = (w: Partial<StoredMonitorWidgetV1>): MonitorWidget => {
@@ -189,8 +244,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       title: w.title || getDefaultWidgetName(type),
       x: typeof w.x === 'number' ? w.x : 0,
       y: typeof w.y === 'number' ? w.y : 0,
-      width: typeof w.width === 'number' ? w.width : (type === 'clock' ? 320 : 640),
-      height: typeof w.height === 'number' ? w.height : (type === 'clock' ? 200 : 480),
+      width: typeof w.width === 'number' ? w.width : (type === 'clock' ? 320 : type === 'forwarding' ? 520 : 640),
+      height: typeof w.height === 'number' ? w.height : (type === 'clock' ? 200 : type === 'forwarding' ? 420 : 480),
       zIndex: typeof w.zIndex === 'number' ? w.zIndex : 1,
     };
 
@@ -198,6 +253,13 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       return {
         ...base,
         clockSource: w.clockSource === 'beijing' ? 'beijing' : 'local',
+      };
+    }
+
+    if (type === 'forwarding') {
+      return {
+        ...base,
+        forwardingChannelId: (w as any).forwardingChannelId,
       };
     }
 
@@ -226,13 +288,115 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     };
   };
 
+  const applyImportedLayout = useCallback(async (parsed: any, opts?: { toast?: boolean }) => {
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.widgets)) {
+      Message.error(t('monitor.layout.importFailed'));
+      return;
+    }
+
+    const nextCanvas = parsed?.canvasState && typeof parsed.canvasState === 'object' ? parsed.canvasState : defaultCanvasState;
+    const nextWidgets = parsed?.widgets ? parsed.widgets.map(hydrateWidgetFromStorage) : [];
+    setCanvasState(nextCanvas);
+    const fixedWidgets = ensureUniqueTerminalTitles(nextWidgets);
+
+    let portsList = null as any[] | null;
+    try {
+      portsList = await serial.refreshPorts(true);
+    } catch (e) {
+      portsList = null;
+    }
+    const allPorts = (portsList && Array.isArray(portsList) ? portsList : serial.allPorts) || [];
+    const openKeys = new Set<string>(
+      allPorts
+        .filter(p => p && normalizePath(p.path) && p.status === 'open')
+        .map(p => normalizePath(p.path))
+    );
+
+    const usedImportedKeys = new Set<string>();
+    const conflictedPorts: string[] = [];
+    const sanitizedWidgets = fixedWidgets.map(w => {
+      if (w.type !== 'terminal') return w;
+      const raw = String(w.portPath || '').trim();
+      if (!raw) return w;
+      const key = normalizePath(raw);
+      const inUse = openKeys.has(key);
+      const dup = usedImportedKeys.has(key);
+      if (inUse || dup) {
+        conflictedPorts.push(raw);
+        const { portPath, subtitle, ...rest } = w as any;
+        return { ...rest, portPath: undefined, subtitle: undefined, isConnected: false } as MonitorWidget;
+      }
+      usedImportedKeys.add(key);
+      return { ...w, isConnected: false };
+    });
+
+    setWidgets(sanitizedWidgets);
+    setRestoreChecked(true);
+    importPromptDismissedRef.current = false;
+    try {
+      const payload: StoredMonitorLayoutV1 = { version: 1, canvasState: nextCanvas, widgets: sanitizedWidgets.map(sanitizeWidgetForStorage) };
+      const persistString = JSON.stringify(payload);
+      localStorage.setItem(MONITOR_LAYOUT_STORAGE_KEY, persistString);
+      lastPersistRef.current = persistString;
+    } catch (e) {
+    }
+    setTimeout(() => {
+      syncConnectionsFromServer(sanitizedWidgets);
+    }, 0);
+    if (conflictedPorts.length) {
+      const uniq = Array.from(new Set(conflictedPorts.map(x => x.trim()).filter(Boolean)));
+      Message.warning(t('monitor.layout.importPortConflict', { count: uniq.length, ports: uniq.slice(0, 3).join(', ') }));
+    }
+    if (opts?.toast !== false) {
+      Message.success(t('monitor.layout.importSuccess'));
+    }
+  }, [defaultCanvasState, ensureUniqueTerminalTitles, hydrateWidgetFromStorage, normalizePath, sanitizeWidgetForStorage, serial, syncConnectionsFromServer, t]);
+
+  const triggerLayoutImport = useCallback(() => {
+    const el = layoutFileInputRef.current;
+    if (!el) return;
+    el.click();
+  }, []);
+
+  const showImportPrompt = useCallback((opts?: { content?: string; markDismissed?: boolean }) => {
+    const markDismissed = opts?.markDismissed !== false;
+    Modal.confirm({
+      title: t('monitor.layout.importPromptTitle'),
+      content: opts?.content || t('monitor.layout.importPromptContent'),
+      okText: t('monitor.layout.importPromptOk'),
+      cancelText: t('monitor.layout.importPromptCancel'),
+      maskClosable: true,
+      onOk: () => {
+        setRestoreChecked(true);
+        setTimeout(() => triggerLayoutImport(), 0);
+      },
+      onCancel: () => {
+        setRestoreChecked(true);
+        if (markDismissed) importPromptDismissedRef.current = true;
+      }
+    });
+  }, [t, triggerLayoutImport]);
+
+  const handleLayoutFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      await applyImportedLayout(parsed);
+    } catch (err) {
+      Message.error(t('monitor.layout.importFailed'));
+    }
+  }, [applyImportedLayout, t]);
+
   useEffect(() => {
     if (restorePromptShownRef.current) return;
     restorePromptShownRef.current = true;
 
     const raw = localStorage.getItem(MONITOR_LAYOUT_STORAGE_KEY);
     if (!raw) {
-      setRestoreChecked(true);
+      showImportPrompt({ markDismissed: true });
       return;
     }
 
@@ -241,39 +405,17 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       parsed = JSON.parse(raw);
     } catch (e) {
       localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
-      setRestoreChecked(true);
+      showImportPrompt({ markDismissed: true });
       return;
     }
 
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.widgets)) {
       localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
-      setRestoreChecked(true);
+      showImportPrompt({ markDismissed: true });
       return;
     }
 
-    Modal.confirm({
-      title: t('monitor.layout.restoreTitle'),
-      content: t('monitor.layout.restoreContent'),
-      okText: t('monitor.layout.restoreOk'),
-      cancelText: t('monitor.layout.restoreCancel'),
-      onOk: () => {
-        const nextCanvas = parsed?.canvasState && typeof parsed.canvasState === 'object' ? parsed.canvasState : defaultCanvasState;
-        const nextWidgets = parsed?.widgets ? parsed.widgets.map(hydrateWidgetFromStorage) : [];
-        setCanvasState(nextCanvas);
-        const fixedWidgets = ensureUniqueTerminalTitles(nextWidgets);
-        setWidgets(fixedWidgets);
-        setRestoreChecked(true);
-        setTimeout(() => {
-          syncConnectionsFromServer(fixedWidgets);
-        }, 0);
-      },
-      onCancel: () => {
-        localStorage.removeItem(MONITOR_LAYOUT_STORAGE_KEY);
-        setCanvasState(defaultCanvasState);
-        setWidgets([]);
-        setRestoreChecked(true);
-      }
-    });
+    applyImportedLayout(parsed, { toast: false }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -428,6 +570,20 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
             }
             return w;
           }));
+        }
+
+        if (msg.type === 'forwarding:metrics') {
+          setForwardingMetrics(msg.data || null);
+        }
+
+        if (msg.type === 'forwarding:alert') {
+          const a = msg.data || {};
+          if (a.type === 'queue') {
+            Message.warning(`转发队列告警：${a.channelId} 队列长度 ${a.queueLength}`);
+          } else if (a.type === 'failureRate') {
+            const rate = typeof a.failureRate === 'number' ? `${Math.round(a.failureRate * 100)}%` : '';
+            Message.warning(`转发失败率告警：${a.channelId} ${rate}`);
+          }
         }
       } catch (e) {
         console.error('Monitor WS Parse Error', e);
@@ -594,15 +750,17 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // 只有点击左键且不是在组件上点击时才触发
-    if (editingWidget) return;
+    if (editingWidget || uiLocked) return;
     if (e.button !== 0) return;
 
     setIsDragging(true);
+    dragStartPosRef.current = { x: e.clientX, y: e.clientY };
+    dragMovedRef.current = false;
     lastMousePos.current = { x: e.clientX, y: e.clientY };
   };
 
   const handleWidgetMouseDown = (e: React.MouseEvent, id: string) => {
-    if (editingWidget) return;
+    if (editingWidget || uiLocked) return;
     if (e.button !== 0) return;
     e.stopPropagation();
     bringToFront(id);
@@ -619,8 +777,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     setWidgets(prev => {
       // 智能布局：寻找一个不重叠的位置
       // 算法：从当前视野中心开始，向外螺旋寻找空闲区域
-      const W = type === 'clock' ? 320 : 640;
-      const H = type === 'clock' ? 200 : 480;
+      const W = type === 'clock' ? 320 : type === 'forwarding' ? 520 : 640;
+      const H = type === 'clock' ? 200 : type === 'forwarding' ? 420 : 480;
 
       // 当前视野的中心点 (相对于画布原点)
       // 注意：offsetX 是画布相对于视口的偏移，所以视口坐标 = 组件坐标 + offsetX
@@ -677,10 +835,10 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       const usedTitles = new Set<string>();
       prev.forEach(w => {
-        if (w.type === 'terminal') usedTitles.add(normalizeTitle(w.title));
+        if (w.type === 'terminal' || w.type === 'forwarding') usedTitles.add(normalizeTitle(w.title));
       });
       const baseTitle = getDefaultWidgetName(type);
-      const newTitle = type === 'terminal' ? makeUniqueTitle(baseTitle, usedTitles) : baseTitle;
+      const newTitle = (type === 'terminal' || type === 'forwarding') ? makeUniqueTitle(baseTitle, usedTitles) : baseTitle;
       const newWidgetBase: MonitorWidget = {
         id: Date.now().toString(),
         type,
@@ -694,23 +852,26 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
       const newWidget: MonitorWidget = type === 'clock'
         ? { ...newWidgetBase, clockSource: 'local' }
-        : {
-          ...newWidgetBase,
-          showSubtitle: true,
-          autoSend: {
-            enabled: false,
-            content: '',
-            encoding: 'hex'
-          },
-          displayMode: 'text',
-          logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`]
-        };
+        : type === 'forwarding'
+          ? { ...newWidgetBase }
+          : {
+            ...newWidgetBase,
+            showSubtitle: true,
+            autoSend: {
+              enabled: false,
+              content: '',
+              encoding: 'hex'
+            },
+            displayMode: 'text',
+            logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`]
+          };
       createdId = newWidget.id;
 
-      // 创建后直接打开编辑弹窗
-      setTimeout(() => {
-        openWidgetConfig(newWidget);
-      }, 100);
+      if (type !== 'forwarding') {
+        setTimeout(() => {
+          openWidgetConfig(newWidget);
+        }, 100);
+      }
 
       return [...prev, newWidget];
     });
@@ -832,6 +993,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       </Menu.Item>
       <Menu.Item key='clock' onClick={() => handleAddWidget('clock')}>
         <Space><IconClockCircle /> {t('monitor.widget.clock')}</Space>
+      </Menu.Item>
+      <Menu.Item key='forwarding' onClick={() => handleAddWidget('forwarding')}>
+        <Space><IconSync /> {t('monitor.widget.forwarding')}</Space>
       </Menu.Item>
     </Menu>
   );
@@ -1045,6 +1209,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           const deltaY = e.clientY - lastMousePos.current.y;
 
           if (isDragging) {
+            const start = dragStartPosRef.current;
+            if (start && !dragMovedRef.current) {
+              const dx0 = e.clientX - start.x;
+              const dy0 = e.clientY - start.y;
+              if (Math.hypot(dx0, dy0) >= 10) dragMovedRef.current = true;
+            }
             setCanvasState(prev => ({
               ...prev,
               offsetX: prev.offsetX + deltaX,
@@ -1066,10 +1236,31 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         cancelAnimationFrame(rafRef.current);
         rafRef.current = undefined;
       }
+      const shouldPrompt =
+        isDragging &&
+        dragMovedRef.current &&
+        restoreChecked &&
+        widgets.length === 0 &&
+        importPromptDismissedRef.current;
       setIsDragging(false);
       setDraggedWidgetId(null);
       setResizingWidgetId(null);
       setResizeStart(null);
+      dragStartPosRef.current = null;
+      dragMovedRef.current = false;
+
+      if (shouldPrompt) {
+        let hasCache = false;
+        try {
+          hasCache = !!localStorage.getItem(MONITOR_LAYOUT_STORAGE_KEY);
+        } catch (err) {
+        }
+        if (!hasCache) {
+          setTimeout(() => {
+            showImportPrompt({ content: t('monitor.layout.emptyImportPromptContent'), markDismissed: false });
+          }, 0);
+        }
+      }
     };
 
     if (isDragging || draggedWidgetId || resizingWidgetId) {
@@ -1081,7 +1272,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       window.removeEventListener('mousemove', onGlobalMove);
       window.removeEventListener('mouseup', onGlobalUp);
     };
-  }, [isDragging, draggedWidgetId, resizingWidgetId, resizeStart, canvasState.scale, editingWidget, updateWidgetById]);
+  }, [isDragging, draggedWidgetId, resizingWidgetId, resizeStart, canvasState.scale, editingWidget, restoreChecked, showImportPrompt, t, updateWidgetById, widgets.length]);
 
   // 网格背景样式
   const gridStyle: React.CSSProperties = {
@@ -1102,6 +1293,10 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   };
 
   const handleExportLayout = () => {
+    if (!widgets.length) {
+      Message.warning(t('monitor.layout.exportEmpty'));
+      return;
+    }
     try {
       const payload: StoredMonitorLayoutV1 & { exportedAt: string } = {
         version: 1,
@@ -1127,6 +1322,47 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     } catch (e) {
       Message.error(t('monitor.layout.exportFailed'));
     }
+  };
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleLayoutButtonPointerDown = (e: any) => {
+    e.stopPropagation();
+    if (e.pointerType === 'mouse') return;
+    longPressTriggeredRef.current = false;
+    clearLongPress();
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressTriggeredRef.current = true;
+      triggerLayoutImport();
+    }, 550);
+  };
+
+  const handleLayoutButtonPointerUp = (e: any) => {
+    e.stopPropagation();
+    clearLongPress();
+  };
+
+  const handleLayoutButtonContextMenu = (e: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearLongPress();
+    longPressTriggeredRef.current = true;
+    triggerLayoutImport();
+  };
+
+  const handleLayoutButtonClick = (e: any) => {
+    e.stopPropagation();
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false;
+      return;
+    }
+    handleExportLayout();
   };
 
   return (
@@ -1188,6 +1424,27 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               onResizeMouseDown={handleResizeMouseDown}
               onUpdate={updateWidget}
             />
+          ) : widget.type === 'forwarding' ? (
+            <ForwardingWidget
+              key={widget.id}
+              widget={widget}
+              canvasState={canvasState}
+              isDragging={isDragging}
+              draggedWidgetId={draggedWidgetId}
+              resizingWidgetId={resizingWidgetId}
+              appearing={!!appearingIds[widget.id]}
+              removing={!!removingIds[widget.id]}
+              metrics={forwardingMetrics}
+              portList={portList}
+              serial={serial}
+              onRefreshPorts={onRefreshPorts}
+              normalizePath={normalizePath}
+              onMouseDown={handleWidgetMouseDown}
+              onLockChange={setUiLocked}
+              onRemove={handleRemoveWidget}
+              onResizeMouseDown={handleResizeMouseDown}
+              onUpdate={updateWidget}
+            />
           ) : null
         ))}
       </div>
@@ -1206,6 +1463,14 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         getDefaultWidgetName={getDefaultWidgetName}
         normalizeTitle={normalizeTitle}
         normalizePath={normalizePath}
+      />
+
+      <input
+        ref={layoutFileInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={handleLayoutFileChange}
       />
 
       {/* 悬浮添加按钮 */}
@@ -1268,8 +1533,19 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               }}
             >
               <Space>
-                <Tooltip content={t('monitor.layout.export')}>
-                  <Button shape='circle' size='large' icon={<IconDownload />} onClick={handleExportLayout} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+                <Tooltip content={t('monitor.layout.exportImportHint')}>
+                  <Button
+                    shape='circle'
+                    size='large'
+                    icon={<IconDownload />}
+                    onClick={handleLayoutButtonClick}
+                    onContextMenu={handleLayoutButtonContextMenu}
+                    onPointerDown={handleLayoutButtonPointerDown}
+                    onPointerUp={handleLayoutButtonPointerUp}
+                    onPointerLeave={handleLayoutButtonPointerUp as any}
+                    onPointerCancel={handleLayoutButtonPointerUp as any}
+                    style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}
+                  />
                 </Tooltip>
                 <Dropdown droplist={droplist} position='br'>
                   <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
