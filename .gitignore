@@ -113,3 +113,8 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Runtime data (local only)
+# data/ contains recorded serial/forwarding records and configs (e.g. webhook URLs),
+# which may include personal/private information. Do not commit to GitHub.
+data/
