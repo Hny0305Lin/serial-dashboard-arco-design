@@ -118,3 +118,6 @@ dist
 # data/ contains recorded serial/forwarding records and configs (e.g. webhook URLs),
 # which may include personal/private information. Do not commit to GitHub.
 data/
+
+# Local tests (optional)
+src/test/forwarding/
