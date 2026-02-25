@@ -26,6 +26,13 @@ export class JsonFileStore<T> {
     this.lastSerialized = serialized;
 
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    try {
+      await fs.copyFile(this.filePath, `${this.filePath}.bak`);
+    } catch (e: any) {
+      if (e?.code !== 'ENOENT') {
+        throw e;
+      }
+    }
     const tmpPath = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
     await fs.writeFile(tmpPath, serialized, 'utf8');
     await fs.rename(tmpPath, this.filePath);

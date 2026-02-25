@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PortInfo } from '../types';
 import { inferSerialReason } from '../utils/serialReason';
+import { getApiBaseUrl } from '../utils/net';
 
 type SerialOpenConfig = {
   path: string;
@@ -13,7 +14,17 @@ type SerialOpenConfig = {
 const normalizePath = (p?: string) => (p || '').toLowerCase().replace(/^\\\\.\\/, '');
 
 async function fetchJson(url: string, init?: RequestInit) {
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const lower = msg.toLowerCase();
+    if (lower.includes('failed to fetch')) {
+      throw new Error(`后端服务不可达：${url}`);
+    }
+    throw e;
+  }
   let json: any = null;
   try {
     json = await res.json();
@@ -39,7 +50,7 @@ export function useSerialPortController(opts: { ws: WebSocket | null }) {
   const refreshPorts = useCallback(async (silent = true) => {
     if (!silent) setLoading(true);
     try {
-      const { json } = await fetchJson('http://localhost:3001/api/ports');
+      const { json } = await fetchJson(`${getApiBaseUrl()}/ports`);
       if (json?.code === 0 && Array.isArray(json?.data)) {
         setAllPorts(json.data as PortInfo[]);
         return json.data as PortInfo[];
@@ -83,8 +94,8 @@ export function useSerialPortController(opts: { ws: WebSocket | null }) {
       if (statusEvent && statusEvent.ts >= minTs) {
         if (statusEvent.status === desired) return;
         if (statusEvent.status === 'error') {
-        const reason = inferSerialReason(statusEvent.error);
-        throw new Error(reason || statusEvent.error || 'open failed');
+          const reason = inferSerialReason(statusEvent.error);
+          throw new Error(reason || statusEvent.error || 'open failed');
         }
       }
       const list = await refreshPorts(true);
@@ -104,7 +115,7 @@ export function useSerialPortController(opts: { ws: WebSocket | null }) {
   const openPort = useCallback(async (config: SerialOpenConfig) => {
     const startedAt = Date.now();
     clearLocalStatus(config.path);
-    const { res, json } = await fetchJson('http://localhost:3001/api/ports/open', {
+    const { res, json } = await fetchJson(`${getApiBaseUrl()}/ports/open`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
@@ -120,7 +131,7 @@ export function useSerialPortController(opts: { ws: WebSocket | null }) {
   const closePort = useCallback(async (path: string) => {
     const startedAt = Date.now();
     clearLocalStatus(path);
-    const { res, json } = await fetchJson('http://localhost:3001/api/ports/close', {
+    const { res, json } = await fetchJson(`${getApiBaseUrl()}/ports/close`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path }),

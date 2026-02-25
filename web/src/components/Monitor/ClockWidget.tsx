@@ -3,6 +3,7 @@ import { IconDragDotVertical, IconClose, IconSettings } from '@arco-design/web-r
 import { Button, Select, Space, Tooltip, Typography } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import type { CanvasState, MonitorWidget } from './types';
+import { useNowTs } from '../../hooks/useNowTs';
 
 type TimeSource = 'local' | 'beijing';
 
@@ -49,7 +50,6 @@ function formatParts(ts: number, timeZone?: string) {
 export default function ClockWidget(props: {
   widget: MonitorWidget;
   canvasState: CanvasState;
-  nowTs: number;
   isDragging: boolean;
   draggedWidgetId: string | null;
   resizingWidgetId: string | null;
@@ -67,7 +67,6 @@ export default function ClockWidget(props: {
     isDragging,
     draggedWidgetId,
     resizingWidgetId,
-    nowTs,
     appearing,
     removing,
     onMouseDown,
@@ -77,6 +76,7 @@ export default function ClockWidget(props: {
     onUpdate
   } = props;
 
+  const nowTs = useNowTs();
   const source: TimeSource = (widget.clockSource === 'beijing' ? 'beijing' : 'local');
   const [beijingSync, setBeijingSync] = useState<{ serverAtFetchMs: number; clientAtFetchMs: number } | null>(null);
   const fetchingRef = useRef(false);
@@ -151,15 +151,16 @@ export default function ClockWidget(props: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        cursor: 'default',
+        cursor: 'move',
         borderTopLeftRadius: '4px',
         borderTopRightRadius: '4px'
-      }}>
+      }} data-monitor-drag-handle="true">
         <Space>
           <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
           <Tooltip content={t('monitor.widget.clock')}>
             <div
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}
+              data-monitor-no-drag="true"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenConfig(widget);
@@ -171,27 +172,29 @@ export default function ClockWidget(props: {
             </div>
           </Tooltip>
         </Space>
-        <Button.Group>
-          <Button
-            type="primary"
-            size="mini"
-            icon={<IconSettings />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenConfig(widget);
-            }}
-          />
-          <Button
-            type="primary"
-            size="mini"
-            status="danger"
-            icon={<IconClose />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove(widget.id);
-            }}
-          />
-        </Button.Group>
+        <div data-monitor-no-drag="true">
+          <Button.Group>
+            <Button
+              type="primary"
+              size="mini"
+              icon={<IconSettings />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenConfig(widget);
+              }}
+            />
+            <Button
+              type="primary"
+              size="mini"
+              status="danger"
+              icon={<IconClose />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(widget.id);
+              }}
+            />
+          </Button.Group>
+        </div>
       </div>
 
       <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>

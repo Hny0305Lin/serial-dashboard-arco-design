@@ -15,6 +15,9 @@ interface ManagedPort {
 export class PortManager extends EventEmitter {
   private ports: Map<string, ManagedPort> = new Map();
   private lastErrorByPath: Map<string, string> = new Map();
+  private lastStatusByPath: Map<string, { status: PortStatus; ts: number }> = new Map();
+  private readonly MAX_ERROR_CACHE = 200;
+  private readonly MAX_STATUS_CACHE = 200;
 
   // 重连策略配置
   private readonly MAX_RECONNECT_ATTEMPTS = 5;
@@ -34,6 +37,7 @@ export class PortManager extends EventEmitter {
 
       // 过滤掉 Windows 标准端口 (COM1) 和无效端口
       const validPorts = ports.filter(p => {
+        if (!p.path) return false;
         // 1. 精准过滤：基于 PnpId 过滤 ACPI\PNP0501 (标准 COM 口)
         if (p.pnpId && (p.pnpId.includes('ACPI') && p.pnpId.includes('PNP0501'))) {
           return false;
@@ -41,11 +45,6 @@ export class PortManager extends EventEmitter {
 
         // 2. 备选过滤：如果厂商名称非常明确是“标准端口类型”
         if (p.manufacturer && (p.manufacturer.includes('标准端口类型') || p.manufacturer.includes('Standard port types'))) {
-          return false;
-        }
-
-        // 3. 过滤掉没有 pnpId 的端口 (通常是原生串口)
-        if (!p.pnpId) {
           return false;
         }
 
@@ -158,11 +157,19 @@ export class PortManager extends EventEmitter {
    * 获取指定串口状态
    */
   public getStatus(path: string): PortStatus {
-    return this.ports.get(path)?.status || 'closed';
+    return this.ports.get(path)?.status || this.lastStatusByPath.get(path)?.status || 'closed';
   }
 
   public getLastError(path: string): string | undefined {
     return this.lastErrorByPath.get(path);
+  }
+
+  public listKnownPaths(): string[] {
+    const set = new Set<string>();
+    for (const k of this.ports.keys()) set.add(k);
+    for (const k of this.lastErrorByPath.keys()) set.add(k);
+    for (const k of this.lastStatusByPath.keys()) set.add(k);
+    return Array.from(set.values());
   }
 
   /**
@@ -207,6 +214,7 @@ export class PortManager extends EventEmitter {
     };
 
     this.ports.set(path, managed);
+    this.setLastStatus(path, 'opening');
 
     // 绑定事件（包括 data 事件）
     this.bindEvents(managed);
@@ -217,7 +225,7 @@ export class PortManager extends EventEmitter {
       port.open((err) => {
         if (err) {
           console.error(`Failed to open port ${path}:`, err.message);
-          this.lastErrorByPath.set(path, err.message);
+          this.setLastError(path, err.message);
           this.ports.delete(path);
           this.updateStatus(path, 'error', err);
           try { port.removeAllListeners(); } catch (e) { }
@@ -229,6 +237,7 @@ export class PortManager extends EventEmitter {
         }
 
         this.lastErrorByPath.delete(path);
+        this.setLastStatus(path, 'open');
         port.set({ dtr: true, rts: true }, (err) => {
           if (err) console.warn(`[PortManager] Failed to set DTR/RTS for ${path}:`, err.message);
           else console.log(`[PortManager] DTR/RTS set for ${path}`);
@@ -296,6 +305,7 @@ export class PortManager extends EventEmitter {
 
   private updateStatus(path: string, status: PortStatus, error?: Error) {
     console.log(`[PortManager] updateStatus called: ${path} -> ${status}`);
+    this.setLastStatus(path, status);
     const managed = this.ports.get(path);
     if (managed) {
       managed.status = status;
@@ -307,6 +317,26 @@ export class PortManager extends EventEmitter {
       timestamp: Date.now()
     });
     console.log(`[PortManager] Emitted status event: ${path} -> ${status}`);
+  }
+
+  private setLastError(path: string, msg: string) {
+    this.lastErrorByPath.delete(path);
+    this.lastErrorByPath.set(path, msg);
+    while (this.lastErrorByPath.size > this.MAX_ERROR_CACHE) {
+      const first = this.lastErrorByPath.keys().next().value as string | undefined;
+      if (!first) break;
+      this.lastErrorByPath.delete(first);
+    }
+  }
+
+  private setLastStatus(path: string, status: PortStatus) {
+    this.lastStatusByPath.delete(path);
+    this.lastStatusByPath.set(path, { status, ts: Date.now() });
+    while (this.lastStatusByPath.size > this.MAX_STATUS_CACHE) {
+      const first = this.lastStatusByPath.keys().next().value as string | undefined;
+      if (!first) break;
+      this.lastStatusByPath.delete(first);
+    }
   }
 
   private handleError(path: string, error: Error) {

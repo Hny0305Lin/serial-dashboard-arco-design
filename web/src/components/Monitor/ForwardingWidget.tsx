@@ -3,6 +3,7 @@ import { IconDragDotVertical, IconClose, IconSettings, IconSync, IconCheckCircle
 import { Button, Space, Typography, Tooltip, Modal, Form, Input, Select, Switch, InputNumber, Tabs, Message, Tag, Card } from '@arco-design/web-react';
 import type { MonitorWidget, CanvasState } from './types';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
+import { getApiBaseUrl } from '../../utils/net';
 
 type ForwardingMetricsSnapshot = {
   ts: number;
@@ -108,6 +109,9 @@ export default function ForwardingWidget(props: {
   onRefreshPorts?: () => void;
   normalizePath: (p?: string) => string;
   onMouseDown: (e: React.MouseEvent, id: string) => void;
+  onOpenConfig: (widget: MonitorWidget) => void;
+  autoOpenSettings?: boolean;
+  onAutoOpenSettingsConsumed?: () => void;
   onUpdate: (id: string, patch: Partial<MonitorWidget>) => void;
   onLockChange: (locked: boolean) => void;
   onRemove: (id: string) => void;
@@ -126,7 +130,9 @@ export default function ForwardingWidget(props: {
     onRefreshPorts,
     normalizePath,
     onMouseDown,
-    onUpdate,
+    onOpenConfig,
+    autoOpenSettings,
+    onAutoOpenSettingsConsumed,
     onLockChange,
     onRemove,
     onResizeMouseDown
@@ -144,24 +150,61 @@ export default function ForwardingWidget(props: {
   const dragScrollRef = useRef<{ active: boolean; startX: number; startScrollLeft: number; moved: boolean }>({ active: false, startX: 0, startScrollLeft: 0, moved: false });
   const [form] = Form.useForm();
 
-  const enabled = metrics?.enabled ?? config?.enabled ?? false;
+  const globalEnabled = metrics?.enabled ?? config?.enabled ?? false;
   const metricsChannels = useMemo(() => metrics?.channels || [], [metrics]);
   const configChannels = useMemo(() => (Array.isArray((config as any)?.channels) ? (config as any).channels : []), [config]);
   const ownedChannelConfigs = useMemo(() => configChannels.filter((c: any) => String(c?.ownerWidgetId || '') === String(widget.id)), [configChannels, widget.id]);
-  const ownedChannelIds = useMemo(() => new Set(ownedChannelConfigs.map((c: any) => String(c?.id || '')).filter(Boolean)), [ownedChannelConfigs]);
+  const panelEnabled = useMemo(() => globalEnabled && ownedChannelConfigs.some((c: any) => !!c?.enabled), [globalEnabled, ownedChannelConfigs]);
   const metricsById = useMemo(() => {
     const m = new Map<string, any>();
     for (const c of metricsChannels) m.set(String(c.channelId), c);
     return m;
   }, [metricsChannels]);
 
+  type ChannelHealth = 'pending' | 'bad' | 'recovering' | 'suspect' | 'ok';
+  const channelHealthByIdRef = useRef<Map<string, ChannelHealth>>(new Map());
+  const channelHealthById = useMemo(() => {
+    const prev = channelHealthByIdRef.current;
+    const map = new Map<string, ChannelHealth>();
+    for (const cc of ownedChannelConfigs) {
+      const id = String(cc?.id || '').trim();
+      if (!id) continue;
+      const m = metricsById.get(id) || null;
+      const total = m ? ((m.sent || 0) + (m.failed || 0)) : 0;
+      let health: ChannelHealth = 'pending';
+      if (m && total > 0) {
+        const successRate = (m.sent || 0) / Math.max(1, total);
+        const wasOk = prev.get(id) === 'ok';
+        if (successRate >= 0.8) health = 'ok';
+        else if (successRate > 0.5) health = wasOk ? 'suspect' : 'recovering';
+        else health = 'bad';
+      }
+      map.set(id, health);
+    }
+    return map;
+  }, [metricsById, ownedChannelConfigs]);
+
+  useEffect(() => {
+    channelHealthByIdRef.current = channelHealthById;
+  }, [channelHealthById]);
+
   const ensureChannelOnceRef = useRef(false);
   const otherChannelsRef = useRef<any[] | null>(null);
+
+  const loadConfigRaw = async (): Promise<ForwardingConfigV1 | null> => {
+    try {
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`);
+      if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'load failed'));
+      return (json.data as any) || null;
+    } catch (e) {
+      return null;
+    }
+  };
 
   const reloadConfig = async (): Promise<ForwardingConfigV1 | null> => {
     setConfigLoading(true);
     try {
-      const { res, json, text } = await fetchJson('http://localhost:3001/api/forwarding/config');
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`);
       if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'load failed'));
       setConfig(json.data as any);
       return json.data as any;
@@ -176,7 +219,7 @@ export default function ForwardingWidget(props: {
   const reloadLogs = async () => {
     setLogsLoading(true);
     try {
-      const { res, json, text } = await fetchJson('http://localhost:3001/api/forwarding/logs?limit=200');
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/logs?limit=200`);
       if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'load failed'));
       setLogs(Array.isArray(json.data) ? json.data : []);
     } catch (e: any) {
@@ -231,7 +274,7 @@ export default function ForwardingWidget(props: {
         http: { url: '', method: 'POST', timeoutMs: 3000, headers: {} }
       };
       const nextCfg: any = { ...config, channels: [...existing, newChannel] };
-      const { res, json, text } = await fetchJson('http://localhost:3001/api/forwarding/config', {
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(nextCfg)
@@ -239,7 +282,7 @@ export default function ForwardingWidget(props: {
       if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'save failed'));
       setConfig(json.data as any);
     };
-    fetchJson('http://localhost:3001/api/forwarding/channels', {
+    fetchJson(`${getApiBaseUrl()}/forwarding/channels`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ownerWidgetId: widget.id, name: '新渠道' })
@@ -286,6 +329,15 @@ export default function ForwardingWidget(props: {
     };
     tryScroll();
   }, [settingsOpen, settingsTab, pendingScrollChannelId]);
+
+  const autoOpenOnceRef = useRef(false);
+  useEffect(() => {
+    if (!autoOpenSettings) return;
+    if (autoOpenOnceRef.current) return;
+    autoOpenOnceRef.current = true;
+    onAutoOpenSettingsConsumed?.();
+    openSettings().catch(() => undefined);
+  }, [autoOpenSettings, onAutoOpenSettingsConsumed]);
 
   const openSettings = async () => {
     setSettingsOpen(true);
@@ -350,16 +402,26 @@ export default function ForwardingWidget(props: {
   };
 
   const handleToggleEnabled = async () => {
-    const nextEnabled = !enabled;
+    const nextPanelEnabled = !panelEnabled;
     try {
-      const { res, json, text } = await fetchJson('http://localhost:3001/api/forwarding/enabled', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: nextEnabled })
+      const latest = await loadConfigRaw();
+      const base = latest || config;
+      if (!base) throw new Error('加载转发配置失败');
+      const channels = Array.isArray((base as any)?.channels) ? (base as any).channels : [];
+      const nextChannels = channels.map((c: any) => {
+        if (String(c?.ownerWidgetId || '') !== String(widget.id)) return c;
+        return { ...c, enabled: nextPanelEnabled };
       });
-      if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'update failed'));
-      setConfig(prev => prev ? { ...prev, enabled: nextEnabled } : prev);
-      Message.success(nextEnabled ? '转发已启用' : '转发已暂停');
+      const anyEnabled = nextChannels.some((c: any) => !!c?.enabled);
+      const nextCfg: any = { ...(base as any), enabled: anyEnabled, channels: nextChannels };
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextCfg)
+      });
+      if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'save failed'));
+      setConfig(json.data as any);
+      Message.success(nextPanelEnabled ? '已启用当前转发' : '已暂停当前转发');
     } catch (e: any) {
       Message.error(e?.message || '更新失败');
     }
@@ -368,17 +430,31 @@ export default function ForwardingWidget(props: {
   const handleSaveConfig = async () => {
     try {
       const values = await form.validate();
-      const others = Array.isArray(otherChannelsRef.current) ? otherChannelsRef.current : [];
+      const latest = await loadConfigRaw();
+      const base: any = latest || config || { version: 1, enabled: false, sources: [], channels: [] };
+      const baseChannels = Array.isArray(base?.channels) ? base.channels : [];
+      const others = baseChannels.filter((c: any) => String(c?.ownerWidgetId || '') !== String(widget.id));
       const ownedNext = Array.isArray(values.channels) ? values.channels.map((c: any) => ({ ...c, ownerWidgetId: widget.id })) : [];
-      const next: ForwardingConfigV1 = {
+      const next: any = {
+        ...base,
         version: 1,
         enabled: !!values.enabled,
         sources: Array.isArray(values.sources) ? values.sources : [],
-        channels: [...others, ...ownedNext] as any,
-        store: config?.store,
-        alert: config?.alert
+        channels: [...others, ...ownedNext]
       };
-      const { res, json, text } = await fetchJson('http://localhost:3001/api/forwarding/config', {
+      if (baseChannels.length > 0 && next.channels.length === 0) {
+        const ok = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: '确认清空所有渠道？',
+            content: '这会删除全部转发渠道配置（包含 URL / headers 等）。如果你只是想暂停转发，请用启停按钮。',
+            okButtonProps: { status: 'danger' },
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          });
+        });
+        if (!ok) return;
+      }
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(next)
@@ -388,11 +464,11 @@ export default function ForwardingWidget(props: {
       Message.success('配置已保存');
       setSettingsOpen(false);
       reloadLogs().catch(() => undefined);
-      const openKeys = new Set(serial.allPorts.filter(p => p && p.status === 'open').map(p => normalizePath(p.path)));
+      const openKeys = new Set<string>(serial.allPorts.filter(p => p && p.status === 'open').map(p => normalizePath(p.path)));
       const missing = (next.sources || [])
         .map((s: any) => String(s?.portPath || '').trim())
-        .filter(Boolean)
-        .filter(p => !openKeys.has(normalizePath(p)));
+        .filter((p: string) => p.length > 0)
+        .filter((p: string) => !openKeys.has(normalizePath(p)));
       if (missing.length > 0) {
         Message.warning(`数据源未连接：${Array.from(new Set(missing)).join(', ')}（请先在终端组件连接对应串口）`);
       }
@@ -401,8 +477,8 @@ export default function ForwardingWidget(props: {
     }
   };
 
-  const statusIcon = enabled ? <IconCheckCircle style={{ color: '#00b42a' }} /> : <IconExclamationCircle style={{ color: '#86909c' }} />;
-  const statusText = enabled ? '运行中' : '已暂停';
+  const statusIcon = panelEnabled ? <IconCheckCircle style={{ color: '#00b42a' }} /> : <IconExclamationCircle style={{ color: '#86909c' }} />;
+  const statusText = panelEnabled ? '运行中' : '已暂停';
 
   return (
     <div
@@ -424,6 +500,7 @@ export default function ForwardingWidget(props: {
         transform: `translate3d(${widget.x}px, ${widget.y}px, 0) scale(${(removing || appearing) ? 0.98 : 1})`,
         transition: (draggedWidgetId === widget.id || resizingWidgetId === widget.id || isDragging) ? 'none' : 'opacity 160ms ease, transform 160ms ease, box-shadow 0.2s',
       }}
+      onMouseDown={(e) => onMouseDown(e, widget.id)}
     >
       <div style={{
         padding: '8px 12px',
@@ -435,55 +512,66 @@ export default function ForwardingWidget(props: {
         cursor: 'move',
         borderTopLeftRadius: '4px',
         borderTopRightRadius: '4px'
-      }} onMouseDown={(e) => onMouseDown(e, widget.id)}>
+      }} data-monitor-drag-handle="true">
         <Space>
           <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
           <span style={{ width: 12, display: 'inline-flex', justifyContent: 'center', alignItems: 'center' }}>
             {statusIcon}
           </span>
-          <div style={{ display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}>
-            <Typography.Text bold style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {widget.title}
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-              {statusText}
-            </Typography.Text>
-          </div>
-        </Space>
-        <Button.Group>
-          <Tooltip content={enabled ? '暂停转发' : '启用转发'}>
-            <Button
-              type={enabled ? 'primary' : 'secondary'}
-              status={enabled ? 'success' : 'default'}
-              size="mini"
-              icon={<IconSync />}
-              loading={configLoading}
+          <Tooltip content={widget.title}>
+            <div
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}
+              data-monitor-no-drag="true"
               onClick={(e) => {
                 e.stopPropagation();
-                handleToggleEnabled();
+                onOpenConfig(widget);
+              }}
+            >
+              <Typography.Text bold style={{ display: 'inline-block', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {widget.title}
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                {statusText}
+              </Typography.Text>
+            </div>
+          </Tooltip>
+        </Space>
+        <div data-monitor-no-drag="true">
+          <Button.Group>
+            <Tooltip content={panelEnabled ? '暂停当前转发' : '启用当前转发'}>
+              <Button
+                type={panelEnabled ? 'primary' : 'secondary'}
+                status={panelEnabled ? 'success' : 'default'}
+                size="mini"
+                icon={<IconSync />}
+                loading={configLoading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleToggleEnabled();
+                }}
+              />
+            </Tooltip>
+            <Button
+              type="primary"
+              size="mini"
+              icon={<IconSettings />}
+              onClick={(e) => {
+                e.stopPropagation();
+                openSettings();
               }}
             />
-          </Tooltip>
-          <Button
-            type="primary"
-            size="mini"
-            icon={<IconSettings />}
-            onClick={(e) => {
-              e.stopPropagation();
-              openSettings();
-            }}
-          />
-          <Button
-            type="primary"
-            size="mini"
-            status="danger"
-            icon={<IconClose />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove(widget.id);
-            }}
-          />
-        </Button.Group>
+            <Button
+              type="primary"
+              size="mini"
+              status="danger"
+              icon={<IconClose />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(widget.id);
+              }}
+            />
+          </Button.Group>
+        </div>
       </div>
 
       <div style={{ flex: 1, padding: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -509,7 +597,7 @@ export default function ForwardingWidget(props: {
               const id = String(cc?.id || '').trim();
               const m = id ? metricsById.get(id) : null;
               const enabled = !!cc?.enabled;
-              const ok = m ? (m.sent > 0 ? (m.failed / Math.max(1, m.sent + m.failed)) < 0.2 : true) : true;
+              const health = (id ? channelHealthById.get(id) : null) || 'pending';
               return (
                 <Card
                   key={id || cc?.name}
@@ -534,7 +622,11 @@ export default function ForwardingWidget(props: {
                 >
                   <Space>
                     <Tag color={enabled ? 'green' : 'gray'}>{enabled ? '启用' : '停用'}</Tag>
-                    <Tag color={ok ? 'green' : 'red'}>{ok ? 'OK' : '异常'}</Tag>
+                    <Tag
+                      color={health === 'ok' ? 'green' : health === 'suspect' ? 'orange' : health === 'recovering' ? 'blue' : health === 'bad' ? 'red' : 'gray'}
+                    >
+                      {health === 'ok' ? 'OK' : health === 'suspect' ? '疑似问题' : health === 'recovering' ? '正在恢复' : health === 'bad' ? '异常' : '暂定'}
+                    </Tag>
                   </Space>
                   <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <Typography.Text type="secondary">队列 {m?.queueLength ?? 0}</Typography.Text>
@@ -819,7 +911,36 @@ export default function ForwardingWidget(props: {
                             </Form.Item>
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
-                            <Form.Item field={`${field.field}.http.url`} label="HTTP URL (type=http)">
+                            <Form.Item
+                              field={`${field.field}.http.url`}
+                              label="HTTP URL (type=http)"
+                              rules={[
+                                {
+                                  validator: (value, callback) => {
+                                    const list = form.getFieldValue('channels') || [];
+                                    const c = list?.[Number(field.field)] || {};
+                                    const type = String(c?.type || '').trim();
+                                    const enabled = !!c?.enabled;
+                                    const raw = String(value || '').trim();
+                                    if (type !== 'http') return callback();
+                                    if (enabled && !raw) return callback('HTTP URL 必填');
+                                    if (!raw) return callback();
+                                    let u: URL | null = null;
+                                    try {
+                                      u = new URL(raw);
+                                    } catch (e) {
+                                      return callback('URL 无效');
+                                    }
+                                    const payloadFormat = String(c?.payloadFormat || '').trim();
+                                    const isFeishuHook = u.hostname === 'open.feishu.cn' && u.pathname.startsWith('/open-apis/bot/v2/hook/');
+                                    if (isFeishuHook && payloadFormat !== 'feishu') {
+                                      return callback('飞书机器人Webhook请把发送格式改为 Feishu Bot (text)');
+                                    }
+                                    return callback();
+                                  }
+                                }
+                              ]}
+                            >
                               <Input placeholder="http://..." />
                             </Form.Item>
                             <Form.Item field={`${field.field}.websocket.url`} label="WS URL (type=websocket)">

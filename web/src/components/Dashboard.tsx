@@ -39,6 +39,7 @@ import DashboardHome from './DashboardHome';
 import MonitorCanvas from './Monitor/MonitorCanvas';
 import type { PortInfo } from '../types';
 import { useSerialPortController } from '../hooks/useSerialPortController';
+import { getApiBaseUrl, getWsUrl } from '../utils/net';
 
 import LogSavePage from './LogSavePage';
 
@@ -259,7 +260,7 @@ function AppContent() {
     const connect = () => {
       if (isUnmounted) return;
       console.log('Connecting to WebSocket...');
-      const socket = new WebSocket('ws://localhost:3001/ws');
+      const socket = new WebSocket(getWsUrl());
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -397,7 +398,7 @@ function AppContent() {
       // 自动发送逻辑
       if (autoSend.enabled && autoSend.content) {
         try {
-          await fetch('http://localhost:3001/api/ports/write', {
+          await fetch(`${getApiBaseUrl()}/ports/write`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -440,7 +441,7 @@ function AppContent() {
 
     setSending(true);
     try {
-      const res = await fetch('http://localhost:3001/api/ports/write', {
+      const res = await fetch(`${getApiBaseUrl()}/ports/write`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

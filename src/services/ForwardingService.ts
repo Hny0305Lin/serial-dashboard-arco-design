@@ -1,5 +1,6 @@
 import path from 'path';
 import crypto from 'crypto';
+import { URL } from 'url';
 import { PortManager } from '../core/PortManager';
 import { FileQueue, FileQueueItem } from '../storage/FileQueue';
 import { JsonFileStore } from '../storage/JsonFileStore';
@@ -29,6 +30,7 @@ export class ForwardingService {
   private sourceBuffers: Map<string, Buffer> = new Map();
   private channelQueues: Map<string, FileQueue<ForwardingOutboundBatch>> = new Map();
   private channelSenders: Map<string, ChannelSender> = new Map();
+  private channelSenderKeyById: Map<string, string> = new Map();
   private channelMetrics: Map<string, ForwardingChannelMetrics> = new Map();
   private channelBatchBuffers: Map<string, ForwardingRecord[]> = new Map();
   private channelFlushTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -67,6 +69,46 @@ export class ForwardingService {
     const loaded = await this.store.read(this.config);
     this.applyConfig(loaded);
     this.bindPortManager();
+  }
+
+  private senderKeyForChannel(ch: ForwardingChannelConfig): string {
+    const type = String((ch as any)?.type || '').trim();
+    if (type === 'http') {
+      const url = String((ch as any)?.http?.url || '').trim();
+      const method = String((ch as any)?.http?.method || 'POST').trim();
+      const pf = String((ch as any)?.payloadFormat || '').trim();
+      return `http|${pf}|${method}|${url}`;
+    }
+    if (type === 'websocket') {
+      const url = String((ch as any)?.websocket?.url || '').trim();
+      const pf = String((ch as any)?.payloadFormat || '').trim();
+      const protos = Array.isArray((ch as any)?.websocket?.protocols) ? (ch as any).websocket.protocols.join(',') : '';
+      return `websocket|${pf}|${url}|${protos}`;
+    }
+    if (type === 'tcp') {
+      const host = String((ch as any)?.tcp?.host || '').trim();
+      const port = Number((ch as any)?.tcp?.port || 0);
+      const pf = String((ch as any)?.payloadFormat || '').trim();
+      return `tcp|${pf}|${host}|${port}`;
+    }
+    if (type === 'mqtt') {
+      const url = String((ch as any)?.mqtt?.url || '').trim();
+      const topic = String((ch as any)?.mqtt?.topic || '').trim();
+      const pf = String((ch as any)?.payloadFormat || '').trim();
+      return `mqtt|${pf}|${url}|${topic}`;
+    }
+    return `unknown|${type}`;
+  }
+
+  private isFeishuHookUrl(raw?: string): boolean {
+    const s = String(raw || '').trim();
+    if (!s) return false;
+    try {
+      const u = new URL(s);
+      return u.hostname === 'open.feishu.cn' && u.pathname.startsWith('/open-apis/bot/v2/hook/');
+    } catch (e) {
+      return false;
+    }
   }
 
   private bindPortManager(): void {
@@ -182,13 +224,38 @@ export class ForwardingService {
     return { config: this.getConfig(), channelId };
   }
 
+  public async removeChannelsByOwner(ownerWidgetId: string): Promise<{ config: ForwardingConfigV1; removed: number }> {
+    const owner = String(ownerWidgetId || '').trim();
+    if (!owner) return { config: this.getConfig(), removed: 0 };
+    const before = Array.isArray(this.config.channels) ? this.config.channels : [];
+    const nextChannels = before.filter(c => String((c as any)?.ownerWidgetId || '') !== owner);
+    const removed = before.length - nextChannels.length;
+    if (removed <= 0) return { config: this.getConfig(), removed: 0 };
+    const next: ForwardingConfigV1 = { ...this.config, channels: nextChannels };
+    await this.setConfig(next);
+    return { config: this.getConfig(), removed };
+  }
+
   private applyConfig(raw: ForwardingConfigV1): void {
     const dataDir = raw.store?.dataDir || this.config.store?.dataDir || path.join(process.cwd(), 'data');
+    const normalizedChannels = (Array.isArray(raw.channels) ? raw.channels : [])
+      .filter(c => c && typeof (c as any).id === 'string')
+      .map((c: any) => {
+        const next = { ...c };
+        const t = String(next?.type || '').trim();
+        if (t === 'http') {
+          const http = next?.http && typeof next.http === 'object' ? { ...next.http } : {};
+          if (typeof http.url === 'string') http.url = http.url.trim();
+          if (this.isFeishuHookUrl(http.url)) next.payloadFormat = 'feishu';
+          next.http = http;
+        }
+        return next;
+      });
     const next: ForwardingConfigV1 = {
       version: 1,
       enabled: !!raw.enabled,
       sources: Array.isArray(raw.sources) ? raw.sources.filter(s => s && typeof s.portPath === 'string') : [],
-      channels: Array.isArray(raw.channels) ? raw.channels.filter(c => c && typeof c.id === 'string') : [],
+      channels: normalizedChannels,
       store: {
         maxMemoryRecords: raw.store?.maxMemoryRecords || 2000,
         dataDir,
@@ -236,6 +303,7 @@ export class ForwardingService {
       if (!keep.has(id)) {
         s.close().catch(() => undefined);
         this.channelSenders.delete(id);
+        this.channelSenderKeyById.delete(id);
       }
     }
     for (const id of Array.from(this.channelQueues.keys())) {
@@ -252,6 +320,14 @@ export class ForwardingService {
     }
 
     for (const ch of this.config.channels) {
+      const key = this.senderKeyForChannel(ch);
+      const oldKey = this.channelSenderKeyById.get(ch.id);
+      if (oldKey && oldKey !== key) {
+        const existing = this.channelSenders.get(ch.id);
+        if (existing) existing.close().catch(() => undefined);
+        this.channelSenders.delete(ch.id);
+        this.channelSenderKeyById.delete(ch.id);
+      }
       if (!this.channelQueues.has(ch.id)) {
         const q = new FileQueue<ForwardingOutboundBatch>(path.join(dataDir, 'queues', ch.id));
         this.channelQueues.set(ch.id, q);
@@ -357,6 +433,19 @@ export class ForwardingService {
     const u = (url || '').trim();
     if (!u) return;
     try {
+      if (this.isFeishuHookUrl(u)) {
+        const text = (() => {
+          try {
+            return JSON.stringify(payload);
+          } catch (e) {
+            return String(payload);
+          }
+        })();
+        const body = Buffer.from(JSON.stringify({ msg_type: 'text', content: { text } }), 'utf8');
+        const sender = new HttpSender({ url: u, method: 'POST', timeoutMs: 3000, headers: { 'content-type': 'application/json' } }, { validateJsonCode: true });
+        await sender.send(body, { 'content-type': 'application/json; charset=utf-8' });
+        return;
+      }
       const sender = new HttpSender({ url: u, method: 'POST', timeoutMs: 3000, headers: { 'content-type': 'application/json' } });
       await sender.send(Buffer.from(JSON.stringify(payload), 'utf8'), { 'content-type': 'application/json; charset=utf-8' });
     } catch (e) {
@@ -522,10 +611,18 @@ export class ForwardingService {
   }
 
   private senderForChannel(ch: ForwardingChannelConfig): ChannelSender {
+    const key = this.senderKeyForChannel(ch);
     const existing = this.channelSenders.get(ch.id);
-    if (existing) return existing;
+    if (existing) {
+      const oldKey = this.channelSenderKeyById.get(ch.id);
+      if (!oldKey || oldKey === key) return existing;
+      existing.close().catch(() => undefined);
+      this.channelSenders.delete(ch.id);
+      this.channelSenderKeyById.delete(ch.id);
+    }
     const sender = createChannelSender(ch);
     this.channelSenders.set(ch.id, sender);
+    this.channelSenderKeyById.set(ch.id, key);
     return sender;
   }
 

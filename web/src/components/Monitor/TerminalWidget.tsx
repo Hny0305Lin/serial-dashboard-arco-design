@@ -89,10 +89,10 @@ export default function TerminalWidget(props: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        cursor: 'default',
+        cursor: 'move',
         borderTopLeftRadius: '4px',
         borderTopRightRadius: '4px'
-      }}>
+      }} data-monitor-drag-handle="true">
         <Space>
           <IconDragDotVertical style={{ color: '#86909c', cursor: 'move' }} />
           <span style={{ width: 12, display: 'inline-flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -101,6 +101,7 @@ export default function TerminalWidget(props: {
           <Tooltip content={widget.portPath || t('monitor.noPort')}>
             <div
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'baseline', minWidth: 0, maxWidth: '100%' }}
+              data-monitor-no-drag="true"
               onClick={(e) => {
                 e.stopPropagation();
                 onOpenConfig(widget);
@@ -117,44 +118,46 @@ export default function TerminalWidget(props: {
             </div>
           </Tooltip>
         </Space>
-        <Button.Group>
-          <Tooltip content={widget.isConnected ? t('monitor.disconnect') : (canToggleConnection ? t('monitor.connect') : t('monitor.noPort'))}>
+        <div data-monitor-no-drag="true">
+          <Button.Group>
+            <Tooltip content={widget.isConnected ? t('monitor.disconnect') : (canToggleConnection ? t('monitor.connect') : t('monitor.noPort'))}>
+              <Button
+                type={widget.isConnected ? 'primary' : (canToggleConnection ? 'primary' : 'secondary')}
+                status={widget.isConnected ? 'success' : 'default'}
+                size="mini"
+                icon={widget.isConnected ? <IconLink /> : <IconStop />}
+                style={widget.isConnected ? undefined : (canToggleConnection ? undefined : { opacity: 0.45 })}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!widget.isConnected && !canToggleConnection) {
+                    Message.warning(`${t('monitor.noPort')}，请先完成组件配置。`);
+                    return;
+                  }
+                  onToggleConnection(e, widget);
+                }}
+              />
+            </Tooltip>
             <Button
-              type={widget.isConnected ? 'primary' : (canToggleConnection ? 'primary' : 'secondary')}
-              status={widget.isConnected ? 'success' : 'default'}
+              type="primary"
               size="mini"
-              icon={widget.isConnected ? <IconLink /> : <IconStop />}
-              style={widget.isConnected ? undefined : (canToggleConnection ? undefined : { opacity: 0.45 })}
+              icon={<IconSettings />}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!widget.isConnected && !canToggleConnection) {
-                  Message.warning(`${t('monitor.noPort')}，请先完成组件配置。`);
-                  return;
-                }
-                onToggleConnection(e, widget);
+                onOpenConfig(widget);
               }}
             />
-          </Tooltip>
-          <Button
-            type="primary"
-            size="mini"
-            icon={<IconSettings />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenConfig(widget);
-            }}
-          />
-          <Button
-            type="primary"
-            size="mini"
-            status="danger"
-            icon={<IconClose />}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove(widget.id);
-            }}
-          />
-        </Button.Group>
+            <Button
+              type="primary"
+              size="mini"
+              status="danger"
+              icon={<IconClose />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove(widget.id);
+              }}
+            />
+          </Button.Group>
+        </div>
       </div>
 
       <div style={{ flex: 1, padding: 0, overflow: 'hidden', position: 'relative' }}>

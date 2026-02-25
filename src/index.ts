@@ -7,7 +7,11 @@ import cors from 'cors';
 import path from 'path';
 import { ForwardingService } from './services/ForwardingService';
 
-const PORT = 3001;
+const PORT = (() => {
+  const n = Number(String(process.env.PORT || '').trim());
+  if (Number.isFinite(n) && n > 0) return n;
+  return 9001;
+})();
 
 async function main() {
   const portManager = new PortManager();
@@ -18,10 +22,10 @@ async function main() {
     dataDir
   });
   await forwarding.init();
-  
+
   // 初始化 Express 应用
   const app = createApp(portManager, forwarding);
-  
+
   // 使用 /api 前缀挂载路由
   // createApp 返回的是 express() 实例，可以直接作为子应用挂载
   const mainApp = express();
@@ -30,7 +34,7 @@ async function main() {
 
   // 创建 HTTP 服务器
   const server = http.createServer(mainApp);
-  
+
   // 创建 WebSocket 服务器
   const wss = createWsServer(server, portManager, forwarding);
 

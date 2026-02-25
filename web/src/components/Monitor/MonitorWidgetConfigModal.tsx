@@ -118,6 +118,14 @@ export default function MonitorWidgetConfigModal(props: {
                       callback(t('monitor.validation.titleInvalid'));
                       return;
                     }
+                    if (editingWidget?.type === 'forwarding') {
+                      const key = normalizeTitle(title);
+                      const dup = widgets.some(w => (w.type === 'terminal' || w.type === 'forwarding') && normalizeTitle(w.title) === key && w.id !== editingWidget?.id);
+                      if (dup) {
+                        callback(t('monitor.validation.titleDuplicate'));
+                        return;
+                      }
+                    }
                     callback();
                   }
                 }

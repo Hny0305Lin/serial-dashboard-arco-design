@@ -23,8 +23,8 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  try { backend.kill(); } catch (e) {}
-  try { web.kill(); } catch (e) {}
+  try { backend.kill(); } catch (e) { }
+  try { web.kill(); } catch (e) { }
 }
 
 process.on('SIGINT', () => {
@@ -42,4 +42,3 @@ backend.on('exit', () => {
 web.on('exit', () => {
   shutdown();
 });
-

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPlus, IconCode, IconDownload, IconMinus, IconSync, IconClockCircle, IconUnorderedList } from '@arco-design/web-react/icon';
 import { Button, Space, Typography, Dropdown, Menu, Modal, Form, Tooltip, Grid, Message } from '@arco-design/web-react';
@@ -9,7 +9,9 @@ import ClockWidget from './ClockWidget';
 import ForwardingWidget from './ForwardingWidget';
 import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
+import { useNowTs } from '../../hooks/useNowTs';
 import { inferSerialReason } from '../../utils/serialReason';
+import { getApiBaseUrl } from '../../utils/net';
 
 const { Row, Col } = Grid;
 
@@ -17,6 +19,17 @@ const { Row, Col } = Grid;
 const INITIAL_WIDGETS: MonitorWidget[] = [];
 const MONITOR_LAYOUT_STORAGE_KEY = 'monitorCanvasLayoutV1';
 const FLOATING_PORTAL_Z_INDEX = 150;
+
+async function fetchJson(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch (e) {
+  }
+  return { res, json, text };
+}
 
 type StoredMonitorWidgetV1 = Omit<MonitorWidget, 'logs' | 'isConnected' | 'lastRxAt'>;
 type StoredMonitorLayoutV1 = {
@@ -30,6 +43,31 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const { ws, wsConnected, portList = [], onRefreshPorts } = props;
   const serial = useSerialPortController({ ws });
   const [widgets, setWidgets] = useState<MonitorWidget[]>(INITIAL_WIDGETS);
+  const createWidgetId = useCallback((used?: Set<string>) => {
+    const gen = () => {
+      const anyCrypto = (globalThis as any)?.crypto;
+      const uuid = anyCrypto?.randomUUID?.();
+      if (typeof uuid === 'string' && uuid) return uuid;
+      return `w-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    };
+    if (!used) return gen();
+    let id = gen();
+    while (used.has(id)) id = gen();
+    used.add(id);
+    return id;
+  }, []);
+  const ensureUniqueWidgetIds = useCallback((list: MonitorWidget[]) => {
+    const used = new Set<string>();
+    return list.map(w => {
+      const raw = String((w as any)?.id || '').trim();
+      if (raw && !used.has(raw)) {
+        used.add(raw);
+        return w;
+      }
+      const nextId = createWidgetId(used);
+      return { ...w, id: nextId };
+    });
+  }, [createWidgetId]);
   const normalizePath = (p?: string) => (p || '').toLowerCase().replace(/^\\\\.\\/, '');
   const normalizeTitle = (s?: string) => (s || '').trim().toLowerCase();
   const getDefaultWidgetName = (type?: MonitorWidget['type']) => {
@@ -186,13 +224,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
-  const [nowTs, setNowTs] = useState(() => Date.now());
   const [forwardingMetrics, setForwardingMetrics] = useState<any | null>(null);
-
-  useEffect(() => {
-    const t = window.setInterval(() => setNowTs(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, []);
 
   const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
     const list = await serial.refreshPorts(true);
@@ -297,20 +329,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     const nextCanvas = parsed?.canvasState && typeof parsed.canvasState === 'object' ? parsed.canvasState : defaultCanvasState;
     const nextWidgets = parsed?.widgets ? parsed.widgets.map(hydrateWidgetFromStorage) : [];
     setCanvasState(nextCanvas);
-    const fixedWidgets = ensureUniqueTerminalTitles(nextWidgets);
-
-    let portsList = null as any[] | null;
-    try {
-      portsList = await serial.refreshPorts(true);
-    } catch (e) {
-      portsList = null;
-    }
-    const allPorts = (portsList && Array.isArray(portsList) ? portsList : serial.allPorts) || [];
-    const openKeys = new Set<string>(
-      allPorts
-        .filter(p => p && normalizePath(p.path) && p.status === 'open')
-        .map(p => normalizePath(p.path))
-    );
+    const fixedWidgets = ensureUniqueWidgetIds(ensureUniqueTerminalTitles(nextWidgets));
 
     const usedImportedKeys = new Set<string>();
     const conflictedPorts: string[] = [];
@@ -319,9 +338,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       const raw = String(w.portPath || '').trim();
       if (!raw) return w;
       const key = normalizePath(raw);
-      const inUse = openKeys.has(key);
       const dup = usedImportedKeys.has(key);
-      if (inUse || dup) {
+      if (dup) {
         conflictedPorts.push(raw);
         const { portPath, subtitle, ...rest } = w as any;
         return { ...rest, portPath: undefined, subtitle: undefined, isConnected: false } as MonitorWidget;
@@ -350,7 +368,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     if (opts?.toast !== false) {
       Message.success(t('monitor.layout.importSuccess'));
     }
-  }, [defaultCanvasState, ensureUniqueTerminalTitles, hydrateWidgetFromStorage, normalizePath, sanitizeWidgetForStorage, serial, syncConnectionsFromServer, t]);
+  }, [defaultCanvasState, ensureUniqueTerminalTitles, ensureUniqueWidgetIds, hydrateWidgetFromStorage, normalizePath, sanitizeWidgetForStorage, serial, syncConnectionsFromServer, t]);
 
   const triggerLayoutImport = useCallback(() => {
     const el = layoutFileInputRef.current;
@@ -598,6 +616,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const containerRef = useRef<HTMLDivElement>(null);
   const floatingActionsRef = useRef<HTMLDivElement>(null);
+  const floatingZoomRef = useRef<HTMLDivElement>(null);
+  const prevFloatingZoomRectRef = useRef<DOMRect | null>(null);
   const floatingActionsRafRef = useRef<number | null>(null);
   const [floatingActionsPos, setFloatingActionsPos] = useState<{ top: number; right: number } | null>(null);
   const [floatingZoomPos, setFloatingZoomPos] = useState<{ bottom: number; right: number } | null>(null);
@@ -664,9 +684,28 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     }, 0);
   }, [canUseDom, widgets.length, updateFloatingActionsPos]);
 
+  useLayoutEffect(() => {
+    if (!canUseDom) return;
+    const el = floatingZoomRef.current;
+    if (!el) return;
+    const next = el.getBoundingClientRect();
+    const prev = prevFloatingZoomRectRef.current;
+    prevFloatingZoomRectRef.current = next;
+    if (!prev) return;
+    const dx = prev.left - next.left;
+    const dy = prev.top - next.top;
+    if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    el.style.opacity = '0.88';
+    el.getBoundingClientRect();
+    el.style.transform = 'translate(0px, 0px)';
+    el.style.opacity = '1';
+  }, [canUseDom, floatingZoomPos?.bottom, floatingZoomPos?.right]);
+
   const [editingWidget, setEditingWidget] = useState<MonitorWidget | null>(null);
   const [appearingIds, setAppearingIds] = useState<Record<string, true>>({});
   const [removingIds, setRemovingIds] = useState<Record<string, true>>({});
+  const createdForwardingIdsRef = useRef<Set<string>>(new Set());
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -764,6 +803,11 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     if (e.button !== 0) return;
     e.stopPropagation();
     bringToFront(id);
+    const target = e.target as HTMLElement | null;
+    const noDrag = !!target?.closest?.('[data-monitor-no-drag="true"]');
+    const shouldStartDrag = !!target?.closest?.('[data-monitor-drag-handle="true"]');
+    if (noDrag || !shouldStartDrag) return;
+    e.preventDefault();
     setDraggedWidgetId(id);
     lastMousePos.current = { x: e.clientX, y: e.clientY };
   };
@@ -839,8 +883,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       });
       const baseTitle = getDefaultWidgetName(type);
       const newTitle = (type === 'terminal' || type === 'forwarding') ? makeUniqueTitle(baseTitle, usedTitles) : baseTitle;
+      const usedIds = new Set<string>(prev.map(w => String(w.id)));
       const newWidgetBase: MonitorWidget = {
-        id: Date.now().toString(),
+        id: createWidgetId(usedIds),
         type,
         title: newTitle,
         x: bestX,
@@ -871,6 +916,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         setTimeout(() => {
           openWidgetConfig(newWidget);
         }, 100);
+      } else {
+        createdForwardingIdsRef.current.add(newWidget.id);
       }
 
       return [...prev, newWidget];
@@ -962,6 +1009,15 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
                 Message.error(msg || '断开失败');
                 throw e;
               }
+            }
+          }
+          if (target?.type === 'forwarding') {
+            try {
+              await fetchJson(`${getApiBaseUrl()}/forwarding/channels?ownerWidgetId=${encodeURIComponent(String(id))}`, {
+                method: 'DELETE',
+              });
+            } catch (e) {
+              Message.warning('后端转发渠道清理失败（不影响组件删除）');
             }
           }
           setRemovingIds(prev => ({ ...prev, [id]: true }));
@@ -1080,6 +1136,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     if (editingWidget) return;
     if (e.button !== 0) return;
     e.stopPropagation();
+    e.preventDefault();
     // 不要调用 bringToFront(id)，否则会导致 React 重新排序 DOM，打断 Resize 过程
     // 可以在 Resize 结束后调用 bringToFront，或者仅在视觉上修改 z-index 而不改变数组顺序
     setResizingWidgetId(id);
@@ -1412,7 +1469,6 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               key={widget.id}
               widget={widget}
               canvasState={canvasState}
-              nowTs={nowTs}
               isDragging={isDragging}
               draggedWidgetId={draggedWidgetId}
               resizingWidgetId={resizingWidgetId}
@@ -1440,6 +1496,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               onRefreshPorts={onRefreshPorts}
               normalizePath={normalizePath}
               onMouseDown={handleWidgetMouseDown}
+              onOpenConfig={openWidgetConfig}
+              autoOpenSettings={createdForwardingIdsRef.current.has(widget.id)}
+              onAutoOpenSettingsConsumed={() => createdForwardingIdsRef.current.delete(widget.id)}
               onLockChange={setUiLocked}
               onRemove={handleRemoveWidget}
               onResizeMouseDown={handleResizeMouseDown}
@@ -1474,85 +1533,46 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       />
 
       {/* 悬浮添加按钮 */}
+      <FloatingActiveButton
+        widgets={widgets}
+        floatingActivePos={floatingActivePos}
+        zoomTo={zoomTo}
+        focusWidget={focusWidget}
+        getDefaultWidgetName={getDefaultWidgetName}
+        canUseDom={canUseDom}
+      />
       {(() => {
-        const activeWindowMs = 5000;
-        const activeWidgets = widgets
-          .filter(w => w.type === 'terminal' && !!w.lastRxAt && nowTs - (w.lastRxAt || 0) <= activeWindowMs)
-          .sort((a, b) => (b.lastRxAt || 0) - (a.lastRxAt || 0));
-        const activeDroplist = (
-          <Menu>
-            {activeWidgets.length === 0 ? (
-              <Menu.Item key="none" disabled>
-                暂无活跃组件
-              </Menu.Item>
-            ) : (
-              activeWidgets.map(w => (
-                <Menu.Item
-                  key={w.id}
-                  onClick={() => {
-                    zoomTo(1, window.innerWidth / 2, window.innerHeight / 2);
-                    window.setTimeout(() => {
-                      focusWidget(w.id);
-                    }, 260);
-                  }}
-                >
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <span>{(w.title || '').trim() || getDefaultWidgetName(w.type)}</span>
-                    <span style={{ fontSize: 12, opacity: 0.7 }}>
-                      {(w.portPath || '').trim()} · {Math.max(0, Math.round((nowTs - (w.lastRxAt || 0)) / 1000))}s
-                    </span>
-                  </div>
-                </Menu.Item>
-              ))
-            )}
-          </Menu>
-        );
         const node = (
-          <>
-            <div
-              style={{
-                position: 'fixed',
-                bottom: floatingActivePos?.bottom ?? 20,
-                left: floatingActivePos?.left ?? 20,
-                zIndex: FLOATING_PORTAL_Z_INDEX,
-                transition: 'bottom 180ms ease, left 180ms ease',
-              }}
-            >
-              <Dropdown droplist={activeDroplist} position="top" trigger="hover">
-                <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+          <div
+            ref={floatingActionsRef}
+            style={{
+              position: 'fixed',
+              top: floatingActionsPos?.top ?? 20,
+              right: floatingActionsPos?.right ?? 20,
+              zIndex: FLOATING_PORTAL_Z_INDEX,
+              transition: 'top 180ms ease, right 180ms ease',
+            }}
+          >
+            <Space>
+              <Tooltip content={t('monitor.layout.exportImportHint')}>
+                <Button
+                  shape='circle'
+                  size='large'
+                  icon={<IconDownload />}
+                  onClick={handleLayoutButtonClick}
+                  onContextMenu={handleLayoutButtonContextMenu}
+                  onPointerDown={handleLayoutButtonPointerDown}
+                  onPointerUp={handleLayoutButtonPointerUp}
+                  onPointerLeave={handleLayoutButtonPointerUp as any}
+                  onPointerCancel={handleLayoutButtonPointerUp as any}
+                  style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}
+                />
+              </Tooltip>
+              <Dropdown droplist={droplist} position='br'>
+                <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
               </Dropdown>
-            </div>
-            <div
-              ref={floatingActionsRef}
-              style={{
-                position: 'fixed',
-                top: floatingActionsPos?.top ?? 20,
-                right: floatingActionsPos?.right ?? 20,
-                zIndex: FLOATING_PORTAL_Z_INDEX,
-                transition: 'top 180ms ease, right 180ms ease',
-              }}
-            >
-              <Space>
-                <Tooltip content={t('monitor.layout.exportImportHint')}>
-                  <Button
-                    shape='circle'
-                    size='large'
-                    icon={<IconDownload />}
-                    onClick={handleLayoutButtonClick}
-                    onContextMenu={handleLayoutButtonContextMenu}
-                    onPointerDown={handleLayoutButtonPointerDown}
-                    onPointerUp={handleLayoutButtonPointerUp}
-                    onPointerLeave={handleLayoutButtonPointerUp as any}
-                    onPointerCancel={handleLayoutButtonPointerUp as any}
-                    style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}
-                  />
-                </Tooltip>
-                <Dropdown droplist={droplist} position='br'>
-                  <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
-                </Dropdown>
-              </Space>
-            </div>
-          </>
+            </Space>
+          </div>
         );
         return canUseDom ? createPortal(node, document.body) : node;
       })()}
@@ -1566,12 +1586,14 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         const zoomText = `${Math.round(scale * 100)}%`;
         const node = (
           <div
+            ref={floatingZoomRef}
             style={{
               position: 'fixed',
               bottom: floatingZoomPos?.bottom ?? 20,
               right: floatingZoomPos?.right ?? 20,
               zIndex: FLOATING_PORTAL_Z_INDEX,
-              transition: 'bottom 180ms ease, right 180ms ease',
+              transition: 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease',
+              willChange: 'transform, opacity',
             }}
           >
             <div
@@ -1657,3 +1679,66 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     </div>
   );
 }
+
+const FloatingActiveButton = React.memo(function FloatingActiveButton(props: {
+  widgets: MonitorWidget[];
+  floatingActivePos: { bottom: number; left: number } | null;
+  zoomTo: (nextScale: number, originClientX: number, originClientY: number) => void;
+  focusWidget: (id: string) => void;
+  getDefaultWidgetName: (type?: MonitorWidget['type']) => string;
+  canUseDom: boolean;
+}) {
+  const { widgets, floatingActivePos, zoomTo, focusWidget, getDefaultWidgetName, canUseDom } = props;
+  const nowTs = useNowTs();
+  const activeWindowMs = 5000;
+  const activeWidgets = widgets
+    .filter(w => w.type === 'terminal' && !!w.lastRxAt && nowTs - (w.lastRxAt || 0) <= activeWindowMs)
+    .sort((a, b) => (b.lastRxAt || 0) - (a.lastRxAt || 0));
+
+  const activeDroplist = (
+    <Menu>
+      {activeWidgets.length === 0 ? (
+        <Menu.Item key="none" disabled>
+          暂无活跃组件
+        </Menu.Item>
+      ) : (
+        activeWidgets.map(w => (
+          <Menu.Item
+            key={w.id}
+            onClick={() => {
+              zoomTo(1, window.innerWidth / 2, window.innerHeight / 2);
+              window.setTimeout(() => {
+                focusWidget(w.id);
+              }, 260);
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span>{(w.title || '').trim() || getDefaultWidgetName(w.type)}</span>
+              <span style={{ fontSize: 12, opacity: 0.7 }}>
+                {(w.portPath || '').trim()} · {Math.max(0, Math.round((nowTs - (w.lastRxAt || 0)) / 1000))}s
+              </span>
+            </div>
+          </Menu.Item>
+        ))
+      )}
+    </Menu>
+  );
+
+  const node = (
+    <div
+      style={{
+        position: 'fixed',
+        bottom: floatingActivePos?.bottom ?? 20,
+        left: floatingActivePos?.left ?? 20,
+        zIndex: FLOATING_PORTAL_Z_INDEX,
+        transition: 'bottom 180ms ease, left 180ms ease',
+      }}
+    >
+      <Dropdown droplist={activeDroplist} position="top" trigger="hover">
+        <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+      </Dropdown>
+    </div>
+  );
+
+  return canUseDom ? createPortal(node, document.body) : node;
+});

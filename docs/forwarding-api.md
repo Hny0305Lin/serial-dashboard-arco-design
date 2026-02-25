@@ -1,6 +1,9 @@
 # Forwarding API 文档
 
-Base URL：`http://localhost:3001/api`
+Base URL（后端默认）：`http://localhost:9001/api`
+
+如果使用前端开发服务器（默认 `http://localhost:9000/`），可以直接请求：
+- `http://localhost:9000/api`（由前端 dev server 反代到后端）
 
 ## 1) 获取转发配置
 `GET /forwarding/config`
@@ -43,7 +46,10 @@ Base URL：`http://localhost:3001/api`
 `limit`：1~2000，默认 200
 
 ## WebSocket 推送
-连接：`ws://localhost:3001/ws`
+连接（后端默认）：`ws://localhost:9001/ws`
+
+如果使用前端开发服务器（默认 `http://localhost:9000/`），可以连接：
+- `ws://localhost:9000/ws`（由前端 dev server 反代到后端）
 
 ### 指标推送
 消息：
@@ -56,4 +62,3 @@ Base URL：`http://localhost:3001/api`
 ```json
 { "type": "forwarding:alert", "data": { "type": "queue|failureRate", "channelId": "xxx", "ts": 0 } }
 ```
-

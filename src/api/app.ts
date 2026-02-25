@@ -13,8 +13,13 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
   app.get('/ports', async (req, res) => {
     try {
       const ports = await portManager.list();
-      // 补充当前状态信息
-      const result = ports.map(p => ({
+      const byPath = new Map<string, any>();
+      for (const p of ports) byPath.set(p.path, p);
+      for (const path of portManager.listKnownPaths()) {
+        if (!byPath.has(path)) byPath.set(path, { path });
+      }
+
+      const result = Array.from(byPath.values()).map(p => ({
         ...p,
         status: portManager.getStatus(p.path),
         lastError: portManager.getLastError(p.path)
@@ -43,7 +48,8 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
       });
       res.json({ code: 0, msg: 'success' });
     } catch (error: any) {
-      res.status(500).json({ code: 500, msg: error.message });
+      const msg = error?.message ? String(error.message) : String(error);
+      res.status(500).json({ code: 500, msg: msg || 'open failed' });
     }
   });
 
@@ -109,6 +115,17 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
       const { ownerWidgetId, name } = req.body || {};
       const created = await forwarding.createChannel({ ownerWidgetId, name });
       res.json({ code: 0, msg: 'success', data: created });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
+  app.delete('/forwarding/channels', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    try {
+      const ownerWidgetId = String(req.query.ownerWidgetId || '').trim();
+      const out = await forwarding.removeChannelsByOwner(ownerWidgetId);
+      res.json({ code: 0, msg: 'success', data: out });
     } catch (error: any) {
       res.status(500).json({ code: 500, msg: error.message });
     }
