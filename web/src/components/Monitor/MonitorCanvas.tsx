@@ -9,7 +9,7 @@ import ClockWidget from './ClockWidget';
 import ForwardingWidget from './ForwardingWidget';
 import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
-import { useNowTs } from '../../hooks/useNowTs';
+import { pushForwardingMetrics } from '../../hooks/useForwardingMetrics';
 import { inferSerialReason } from '../../utils/serialReason';
 import { getApiBaseUrl } from '../../utils/net';
 
@@ -162,12 +162,12 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         overflow-x: auto;
         overflow-y: hidden;
         padding-bottom: 2px;
-        cursor: grab;
+        cursor: default;
         user-select: none;
         touch-action: pan-y;
       }
       .forwarding-channels-strip:active {
-        cursor: grabbing;
+        cursor: default;
       }
       .forwarding-channels-strip::-webkit-scrollbar {
         display: none;
@@ -224,7 +224,6 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
-  const [forwardingMetrics, setForwardingMetrics] = useState<any | null>(null);
 
   const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
     const list = await serial.refreshPorts(true);
@@ -591,7 +590,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         }
 
         if (msg.type === 'forwarding:metrics') {
-          setForwardingMetrics(msg.data || null);
+          pushForwardingMetrics(msg.data || null);
         }
 
         if (msg.type === 'forwarding:alert') {
@@ -1490,7 +1489,6 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
               resizingWidgetId={resizingWidgetId}
               appearing={!!appearingIds[widget.id]}
               removing={!!removingIds[widget.id]}
-              metrics={forwardingMetrics}
               portList={portList}
               serial={serial}
               onRefreshPorts={onRefreshPorts}
@@ -1689,7 +1687,7 @@ const FloatingActiveButton = React.memo(function FloatingActiveButton(props: {
   canUseDom: boolean;
 }) {
   const { widgets, floatingActivePos, zoomTo, focusWidget, getDefaultWidgetName, canUseDom } = props;
-  const nowTs = useNowTs();
+  const nowTs = Date.now();
   const activeWindowMs = 5000;
   const activeWidgets = widgets
     .filter(w => w.type === 'terminal' && !!w.lastRxAt && nowTs - (w.lastRxAt || 0) <= activeWindowMs)

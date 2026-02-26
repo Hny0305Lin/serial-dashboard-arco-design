@@ -4,6 +4,7 @@ import { Button, Space, Typography, Tooltip, Modal, Form, Input, Select, Switch,
 import type { MonitorWidget, CanvasState } from './types';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { getApiBaseUrl } from '../../utils/net';
+import { useForwardingMetrics } from '../../hooks/useForwardingMetrics';
 
 type ForwardingMetricsSnapshot = {
   ts: number;
@@ -103,7 +104,6 @@ export default function ForwardingWidget(props: {
   resizingWidgetId: string | null;
   appearing: boolean;
   removing: boolean;
-  metrics: ForwardingMetricsSnapshot | null;
   portList: string[];
   serial: ReturnType<typeof useSerialPortController>;
   onRefreshPorts?: () => void;
@@ -124,7 +124,6 @@ export default function ForwardingWidget(props: {
     resizingWidgetId,
     appearing,
     removing,
-    metrics,
     portList,
     serial,
     onRefreshPorts,
@@ -138,6 +137,7 @@ export default function ForwardingWidget(props: {
     onResizeMouseDown
   } = props;
 
+  const metrics = useForwardingMetrics() as ForwardingMetricsSnapshot | null;
   const [config, setConfig] = useState<ForwardingConfigV1 | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [logs, setLogs] = useState<Array<{ ts: number; level: string; msg: string }>>([]);

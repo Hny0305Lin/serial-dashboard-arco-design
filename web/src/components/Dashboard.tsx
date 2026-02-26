@@ -531,7 +531,7 @@ function AppContent() {
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{ height: 64, background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1d2129', fontWeight: 'bold', fontSize: 18, flexShrink: 0 }}>
                 <Space>
-                  <div style={{ width: 32, height: 32, background: 'url(//p3-armor.byteimg.com/tos-cn-i-49unhts6dw/dfdba5317c0c20ce20e64fac803d52bc.svg~tplv-49unhts6dw-image.image) no-repeat center/contain' }}></div>
+                  <div style={{ width: 32, height: 32, background: 'url(/brand/arco-design.png) no-repeat center/contain' }}></div>
                   {!collapsed && <span>SerialPort</span>}
                 </Space>
               </div>
