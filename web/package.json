@@ -13,7 +13,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "LicenseRef-Haohanyh-Computer-Software-Products-Open-Source-LICENSE",
   "type": "commonjs",
   "dependencies": {
     "@arco-design/web-react": "^2.66.10",

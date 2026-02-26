@@ -14,7 +14,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "LicenseRef-Haohanyh-Computer-Software-Products-Open-Source-LICENSE",
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
