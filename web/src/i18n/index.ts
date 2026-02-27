@@ -161,7 +161,7 @@ const resources = {
       "monitor.layout.restoreOk": "Yes",
       "monitor.layout.restoreCancel": "No, Clear",
       "monitor.layout.export": "Export Layout (JSON)",
-      "monitor.layout.exportImportHint": "Left click: Export. Right click / Long press: Import JSON.",
+      "monitor.layout.exportImportHint": "Left click: Export.\n Right click / Long press: Import JSON.",
       "monitor.layout.exportEmpty": "No widgets yet. Add a widget before exporting layout.",
       "monitor.layout.exportSuccess": "Layout exported",
       "monitor.layout.exportFailed": "Layout export failed",
