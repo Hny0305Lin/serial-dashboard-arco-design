@@ -741,6 +741,14 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const { hash, pathname, search } = window.location;
+    if (!hash || hash === '#') {
+      window.location.replace(`${pathname}${search}#/`);
+    }
+  }, []);
+
   return (
     <Router>
       <AppContent />

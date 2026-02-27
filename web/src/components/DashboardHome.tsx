@@ -60,6 +60,8 @@ interface DashboardHomeProps {
 export default function DashboardHome(props: DashboardHomeProps) {
   const { t } = useTranslation();
   const history = useHistory();
+  const targetPortLabelId = React.useId();
+  const sendContentLabelId = React.useId();
   const {
     totalPortsCount,
     activePortsCount,
@@ -321,8 +323,12 @@ export default function DashboardHome(props: DashboardHomeProps) {
         <Grid.Col span={8}>
           <Card title={t('panel.control')} bordered={false}>
             <Form layout="vertical">
-              <Form.Item label={t('control.targetPort')}>
+              <div>
+                <Typography.Text id={targetPortLabelId} style={{ display: 'block', marginBottom: 8 }}>
+                  {t('control.targetPort')}
+                </Typography.Text>
                 <Select
+                  aria-labelledby={targetPortLabelId}
                   placeholder={t('control.targetPort')}
                   value={sendPath}
                   onChange={setSendPath}
@@ -330,15 +336,19 @@ export default function DashboardHome(props: DashboardHomeProps) {
                 >
                   {openPorts.map(p => <Option key={p.path} value={p.path}>{p.path}</Option>)}
                 </Select>
-              </Form.Item>
+              </div>
 
-              <Form.Item label={t('control.content')}>
+              <div style={{ marginTop: 16 }}>
+                <Typography.Text id={sendContentLabelId} style={{ display: 'block', marginBottom: 8 }}>
+                  {t('control.content')}
+                </Typography.Text>
                 <Tooltip
                   content={t('tooltip.sendContent')}
                   trigger="focus"
                   position="top"
                 >
                   <Input.TextArea
+                    aria-labelledby={sendContentLabelId}
                     rows={6}
                     placeholder={t('control.placeholder')}
                     value={sendContent}
@@ -351,13 +361,15 @@ export default function DashboardHome(props: DashboardHomeProps) {
                     }}
                   />
                 </Tooltip>
-              </Form.Item>
+              </div>
 
-              <Tooltip content={t('tooltip.sendPayload')}>
-                <Button type="primary" long icon={<IconSend />} loading={sending} onClick={handleSend} size="large">
-                  {t('control.sendPayload')}
-                </Button>
-              </Tooltip>
+              <div style={{ marginTop: 16 }}>
+                <Tooltip content={t('tooltip.sendPayload')}>
+                  <Button type="primary" long icon={<IconSend />} loading={sending} onClick={handleSend} size="large">
+                    {t('control.sendPayload')}
+                  </Button>
+                </Tooltip>
+              </div>
             </Form>
           </Card>
 
