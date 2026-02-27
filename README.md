@@ -26,6 +26,7 @@
 - [HTTP API](#http-api)
 - [WebSocket](#websocket)
 - [数据目录与隐私](#数据目录与隐私)
+- [监控页 Astro Islands 改造](#监控页-astro-islands-改造)
 - [排障](#排障)
 - [Roadmap](#roadmap)
 - [FAQ](#faq)
@@ -402,6 +403,13 @@ Endpoint（开发默认）：`ws://localhost:9001/ws`
 
 - 建议：把 `data/` 加入 `.gitignore`，避免提交到仓库
 - 建议：对外分享数据前先脱敏
+
+## 监控页 Astro Islands 改造
+
+如果你希望把实时监控页从“单体 React 组件树”升级为“Astro 页面组织 + React Islands 运行”的架构（保留核心大地图/画布为 React Island，小组件迁移为 Astro 外壳 + 独立 islands），请参考：
+
+- [docs/monitor-astro-islands.md](docs/monitor-astro-islands.md)
+- [docs/monitor-astro-islands.tasks.md](docs/monitor-astro-islands.tasks.md)
 
 ## 排障
 
