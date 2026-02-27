@@ -11,6 +11,7 @@
 ---
 
 本项目基于 [字节跳动Arco设计库](https://github.com/arco-design/arco-design) 实现前端。
+
 本项目基于 [Node.js](https://nodejs.org/en) 实现后端。
 
 本项目使用Trae IDE进行开发，使用GPT-5.2 和 Gemini-3-Pro-Preview大模型，推荐使用大模型辅助，减少手动编写代码的工作量和开发时间。
