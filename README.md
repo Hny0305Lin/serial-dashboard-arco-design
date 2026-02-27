@@ -23,6 +23,7 @@
 - [快速开始](#快速开始)
 - [开发命令](#开发命令)
 - [配置](#配置)
+- [登录与访问控制（TOTP + 公共访问链接）](#登录与访问控制totp--公共访问链接)
 - [HTTP API](#http-api)
 - [WebSocket](#websocket)
 - [数据目录与隐私](#数据目录与隐私)
@@ -95,6 +96,133 @@ pnpm run dev:all
 Forwarding 配置文件：
 
 - `{DATA_DIR}/forwarding.config.json`
+
+## 登录与访问控制（TOTP + 公共访问链接）
+
+本节定义一个“可落地”的鉴权方案，目标是：
+
+- 管理员通过 TOTP（动态口令）完成登录（不做“满大街账号密码”）
+- 支持多浏览器/多设备的“认可设备（Trusted Device）”免重复输入
+- 支持“公共访问链接（Public Access Link）”用于分享只读页面（例如监控/查看日志），但不允许写串口/改配置
+- 同时覆盖 HTTP(`/api`) 与 WebSocket(`/ws`)（尤其是 `serial:send` 写入能力）
+
+配套文档（用于交给后续 AI 按步骤执行）：
+
+- [docs/auth-totp-public-link.md](docs/auth-totp-public-link.md)
+- [docs/auth-totp-public-link.tasks.md](docs/auth-totp-public-link.tasks.md)
+
+### 权限模型
+
+- `admin`：TOTP 登录后的管理员会话
+  - 允许：串口打开/关闭/写入、转发配置写入、设备管理（吊销认可设备/吊销链接）
+- `viewer`：通过公共访问链接获取的只读会话
+  - 允许：查看端口列表、查看监控与日志/指标、订阅 WS 推送
+  - 禁止：所有写入类接口（HTTP/WS）
+
+### 会话与保活（推荐 Cookie）
+
+为减少前后端改动并让 WS 也能统一校验，建议使用 Cookie 承载会话：
+
+- `sid`：短会话（例如 15 分钟）
+  - `HttpOnly; SameSite=Lax`
+  - 用于：已登录态访问 `/api` 与 `/ws`
+- `td`：认可设备令牌（例如 30 天）
+  - `HttpOnly; SameSite=Lax; Max-Age={AUTH_TRUST_DAYS}`
+  - 仅在用户勾选“认可此设备”时设置
+  - 服务端仅保存其 hash，可随时吊销
+- `vid`：公共访问会话（viewer）（例如 7 天，或由链接自带 TTL 决定）
+  - `HttpOnly; SameSite=Lax; Max-Age={AUTH_PUBLIC_LINK_DAYS}`
+  - 由“公共访问链接”换取并落到 cookie，避免每次都带 query token
+
+保活策略（多浏览器/多设备）：
+
+- 前端启动时调用 `GET /api/auth/status`
+  - 若 `sid` 有效：直接进入
+  - 若 `sid` 过期但 `td` 有效：后端续发 `sid`（无感保活）
+  - 若仅 `vid` 有效：进入只读模式（隐藏/禁用写入操作）
+  - 都无效：提示输入 TOTP
+- 前端可每 3–5 分钟调用一次 `GET /api/auth/status`（或在 WS 重连前调用一次），保持短会话滑动续期
+
+### 服务端存储（单管理员 + 设备/链接名单）
+
+建议在 `{DATA_DIR}/auth.json` 落盘：
+
+- `initialized: boolean`
+- `totpSecretBase32: string`
+- `trustedDevices: [{ id, tokenHash, createdAt, lastSeenAt, uaHint }]`
+- `publicLinks: [{ id, tokenHash, scope: 'viewer', createdAt, expiresAt, lastUsedAt, note }]`
+
+约束：
+
+- `td`/公共链接 token 仅保存 hash（可吊销、可审计 lastSeen/lastUsed）
+- 不引入用户表（只有一个管理员 secret）
+
+### 环境变量（建议新增）
+
+- `AUTH_COOKIE_SECRET`：用于签名/加密 cookie（生产环境必须设置）
+- `AUTH_TOTP_ISSUER`：TOTP issuer（默认项目名）
+- `AUTH_TRUST_DAYS`：认可设备有效期（默认 30）
+- `AUTH_PUBLIC_LINK_DAYS`：公共访问会话有效期（默认 7）
+
+### API 约定（/api/auth/*）
+
+基础端点：
+
+- `GET /api/auth/status`
+  - 返回：`{ role: 'none'|'viewer'|'admin', initialized, deviceTrusted }`
+  - 若 `td` 有效但 `sid` 过期：可在此接口内自动续发 `sid`
+- `POST /api/auth/setup`
+  - 仅允许未初始化时调用
+  - 返回：`otpauth://...` 用于前端生成二维码（可选返回一次性 recovery codes）
+- `POST /api/auth/login`
+  - 入参：`code`（TOTP 6 位）+ `trustDevice:boolean`
+  - 成功：写 `sid`；若 `trustDevice` 再写 `td`
+- `POST /api/auth/logout`
+  - 清理 `sid/td/vid`
+
+设备与链接管理（仅 admin）：
+
+- `GET /api/auth/devices`：列出已认可设备
+- `DELETE /api/auth/devices/:id`：吊销某台设备
+- `POST /api/auth/public-links`：创建公共访问链接（scope 固定为 `viewer`）
+- `GET /api/auth/public-links`：列出已创建链接
+- `DELETE /api/auth/public-links/:id`：吊销链接
+
+公共访问链接兑换（viewer）：
+
+- `POST /api/auth/public-links/redeem`
+  - 入参：`token`（链接携带）
+  - 成功：写 `vid`（viewer 会话），并返回基础信息（例如 expiresAt）
+
+### 保护策略（HTTP 与 WS）
+
+HTTP(`/api`)：
+
+- 建议在路由层引入统一 `requireAuth` 中间件
+- 写入类接口必须 `admin`：
+  - `POST /ports/open`
+  - `POST /ports/close`
+  - `POST /ports/write`
+  - `PUT /forwarding/config`
+  - `POST /forwarding/channels`
+  - `DELETE /forwarding/channels`
+  - `POST /forwarding/enabled`
+- 只读类接口允许 `viewer`（或按需也要求 admin）：
+  - `GET /ports`
+  - `GET /forwarding/metrics`
+  - `GET /forwarding/records`
+  - `GET /forwarding/logs`
+
+WebSocket(`/ws`)：
+
+- 握手阶段必须校验 `sid/vid`（拒绝匿名连接）
+- `serial:send` 必须 `admin`（viewer 连接即使建立，也只能收数据，不能写）
+
+### 实现落点（文件级）
+
+- 后端入口：在 `src/index.ts` 里挂载鉴权中间件，并把 `/ws` 从“裸接入”改为 upgrade 拦截后再接入
+- HTTP 路由：在 `src/api/app.ts` 中添加 `/api/auth/*`，并把现有端点按“只读/写入”分类接入鉴权
+- WS：在 `src/api/ws.ts` 中增加握手校验路径与消息级权限校验（尤其是 `serial:send`）
 
 ## HTTP API
 
