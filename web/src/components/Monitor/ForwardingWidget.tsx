@@ -219,7 +219,11 @@ export default function ForwardingWidget(props: {
   const reloadLogs = async () => {
     setLogsLoading(true);
     try {
-      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/logs?limit=200`);
+      const params = new URLSearchParams();
+      params.set('limit', '200');
+      params.set('ownerWidgetId', String(widget.id));
+      if (widget.portPath) params.set('portPath', String(widget.portPath));
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/logs?${params.toString()}`);
       if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'load failed'));
       setLogs(Array.isArray(json.data) ? json.data : []);
     } catch (e: any) {
@@ -264,6 +268,7 @@ export default function ForwardingWidget(props: {
         ownerWidgetId: widget.id,
         type: 'http',
         payloadFormat: 'feishu',
+        deliveryMode: 'at-most-once',
         compression: 'none',
         encryption: 'none',
         flushIntervalMs: 1000,
@@ -271,6 +276,7 @@ export default function ForwardingWidget(props: {
         retryMaxAttempts: 10,
         retryBaseDelayMs: 1000,
         dedupWindowMs: 0,
+        dedupMaxEntries: 10000,
         http: { url: '', method: 'POST', timeoutMs: 3000, headers: {} }
       };
       const nextCfg: any = { ...config, channels: [...existing, newChannel] };
@@ -348,7 +354,10 @@ export default function ForwardingWidget(props: {
       const owned = allChannels.filter((c: any) => String(c?.ownerWidgetId || '') === String(widget.id));
       const others = allChannels.filter((c: any) => String(c?.ownerWidgetId || '') !== String(widget.id));
       otherChannelsRef.current = others;
-      form.setFieldsValue({ enabled: !!next.enabled, sources: next.sources || [], channels: owned });
+      const allSources = Array.isArray((next as any)?.sources) ? (next as any).sources : [];
+      const ownedSources = allSources.filter((s: any) => String(s?.ownerWidgetId || '') === String(widget.id));
+      const ownedEnabled = owned.some((c: any) => !!c?.enabled);
+      form.setFieldsValue({ enabled: ownedEnabled, sources: ownedSources, channels: owned });
     }
   };
 
@@ -362,7 +371,10 @@ export default function ForwardingWidget(props: {
       const owned = allChannels.filter((c: any) => String(c?.ownerWidgetId || '') === String(widget.id));
       const others = allChannels.filter((c: any) => String(c?.ownerWidgetId || '') !== String(widget.id));
       otherChannelsRef.current = others;
-      form.setFieldsValue({ enabled: !!next.enabled, sources: next.sources || [], channels: owned });
+      const allSources = Array.isArray((next as any)?.sources) ? (next as any).sources : [];
+      const ownedSources = allSources.filter((s: any) => String(s?.ownerWidgetId || '') === String(widget.id));
+      const ownedEnabled = owned.some((c: any) => !!c?.enabled);
+      form.setFieldsValue({ enabled: ownedEnabled, sources: ownedSources, channels: owned });
     }
   };
 
@@ -434,12 +446,44 @@ export default function ForwardingWidget(props: {
       const base: any = latest || config || { version: 1, enabled: false, sources: [], channels: [] };
       const baseChannels = Array.isArray(base?.channels) ? base.channels : [];
       const others = baseChannels.filter((c: any) => String(c?.ownerWidgetId || '') !== String(widget.id));
-      const ownedNext = Array.isArray(values.channels) ? values.channels.map((c: any) => ({ ...c, ownerWidgetId: widget.id })) : [];
+      const ownedNext = Array.isArray(values.channels)
+        ? values.channels.map((c: any) => ({ ...c, ownerWidgetId: widget.id, enabled: !!c?.enabled }))
+        : [];
+      const baseSources = Array.isArray(base?.sources) ? base.sources : [];
+      const ownedNextSources = Array.isArray(values.sources) ? values.sources.map((s: any) => ({ ...s, ownerWidgetId: widget.id, enabled: !!s?.enabled })) : [];
+      const ownedPortKeys = new Set<string>(ownedNextSources.map((s: any) => normalizePath(String(s?.portPath || ''))).filter((s: string) => !!s));
+      const otherSources = baseSources.filter((s: any) => {
+        const owner = String(s?.ownerWidgetId || '');
+        if (owner && owner === String(widget.id)) return false;
+        const portKey = normalizePath(String(s?.portPath || ''));
+        if (!owner && ownedPortKeys.has(portKey)) return false;
+        return true;
+      });
+      const enabledPorts: string[] = ownedNextSources
+        .filter((s: any) => !!s?.enabled)
+        .map((s: any) => String(s?.portPath || '').trim())
+        .filter((p: string) => !!p);
+      if (enabledPorts.length > 0) {
+        const baseEnabledByPort = new Map<string, any>();
+        for (const s of baseSources) {
+          if (!s || !s.enabled) continue;
+          const owner = String(s?.ownerWidgetId || '');
+          if (owner && owner === String(widget.id)) continue;
+          const p = String(s?.portPath || '').trim();
+          if (!p) continue;
+          baseEnabledByPort.set(normalizePath(p), s);
+        }
+        const conflicts = enabledPorts.filter((p: string) => baseEnabledByPort.has(normalizePath(p)));
+        if (conflicts.length > 0) {
+          Message.error(`数据源端口冲突：${Array.from(new Set(conflicts)).join(', ')} 已被其他转发组件占用`);
+          return;
+        }
+      }
       const next: any = {
         ...base,
         version: 1,
-        enabled: !!values.enabled,
-        sources: Array.isArray(values.sources) ? values.sources : [],
+        enabled: [...others, ...ownedNext].some((c: any) => !!c?.enabled),
+        sources: [...otherSources, ...ownedNextSources],
         channels: [...others, ...ownedNext]
       };
       if (baseChannels.length > 0 && next.channels.length === 0) {
@@ -465,7 +509,7 @@ export default function ForwardingWidget(props: {
       setSettingsOpen(false);
       reloadLogs().catch(() => undefined);
       const openKeys = new Set<string>(serial.allPorts.filter(p => p && p.status === 'open').map(p => normalizePath(p.path)));
-      const missing = (next.sources || [])
+      const missing = (ownedNextSources || [])
         .map((s: any) => String(s?.portPath || '').trim())
         .filter((p: string) => p.length > 0)
         .filter((p: string) => !openKeys.has(normalizePath(p)));
@@ -696,10 +740,16 @@ export default function ForwardingWidget(props: {
           <Form form={form} layout="vertical">
             <Tabs activeTab={settingsTab} onChange={(k) => setSettingsTab(String(k))}>
               <Tabs.TabPane key="general" title="总开关">
-                <Form.Item field="enabled" label="启用转发" triggerPropName="checked">
-                  <Switch />
+                <Form.Item field="enabled" label="启用当前转发" triggerPropName="checked">
+                  <Switch
+                    onChange={(checked) => {
+                      const list = form.getFieldValue('channels') || [];
+                      const nextList = Array.isArray(list) ? list.map((c: any) => ({ ...c, enabled: !!checked })) : [];
+                      form.setFieldsValue({ enabled: !!checked, channels: nextList });
+                    }}
+                  />
                 </Form.Item>
-                <Typography.Text type="secondary">建议在配置完成后再启用，避免空配置导致无意义的转发循环。</Typography.Text>
+                <Typography.Text type="secondary">这是本组件的总开关：开启会启用该组件下所有渠道，关闭会暂停该组件下所有渠道。</Typography.Text>
               </Tabs.TabPane>
               <Tabs.TabPane key="sources" title="数据源">
                 <Typography.Text type="secondary">数据源不会主动打开串口：请先在「串口终端」组件连接对应端口，再启用转发。</Typography.Text>
@@ -825,6 +875,7 @@ export default function ForwardingWidget(props: {
                           type: 'http',
                           http: { url: '', method: 'POST', timeoutMs: 5000, headers: {} },
                           payloadFormat: 'feishu',
+                          deliveryMode: 'at-most-once',
                           compression: 'none',
                           encryption: 'none',
                           flushIntervalMs: 1000,
@@ -894,6 +945,14 @@ export default function ForwardingWidget(props: {
                             <Form.Item field={`${field.field}.retryBaseDelayMs`} label="重试基准延迟(ms)">
                               <InputNumber min={200} max={60000} />
                             </Form.Item>
+                            <Form.Item field={`${field.field}.deliveryMode`} label="投递模式">
+                              <Select
+                                options={[
+                                  { label: 'at-most-once（不重试未知送达）', value: 'at-most-once' },
+                                  { label: 'at-least-once（失败重试，可能重复）', value: 'at-least-once' }
+                                ]}
+                              />
+                            </Form.Item>
                             <Form.Item field={`${field.field}.compression`} label="压缩">
                               <Select options={[
                                 { label: 'none', value: 'none' },
@@ -908,6 +967,14 @@ export default function ForwardingWidget(props: {
                             </Form.Item>
                             <Form.Item field={`${field.field}.encryptionKeyId`} label="Key ID (可选)">
                               <Input placeholder="例如 A" />
+                            </Form.Item>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>
+                            <Form.Item field={`${field.field}.dedupWindowMs`} label="去重窗口(ms)">
+                              <InputNumber min={0} max={600000} />
+                            </Form.Item>
+                            <Form.Item field={`${field.field}.dedupMaxEntries`} label="去重容量">
+                              <InputNumber min={100} max={200000} />
                             </Form.Item>
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 10 }}>

@@ -19,6 +19,9 @@ const { Row, Col } = Grid;
 const INITIAL_WIDGETS: MonitorWidget[] = [];
 const MONITOR_LAYOUT_STORAGE_KEY = 'monitorCanvasLayoutV1';
 const FLOATING_PORTAL_Z_INDEX = 150;
+const MONITOR_TERMINAL_LOGS_STORAGE_KEY = 'monitorTerminalLogsV1';
+const MAX_TERMINAL_LOG_LINES = 500;
+const MAX_TERMINAL_LOG_PORTS = 16;
 
 async function fetchJson(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
@@ -37,6 +40,51 @@ type StoredMonitorLayoutV1 = {
   canvasState: CanvasState;
   widgets: StoredMonitorWidgetV1[];
 };
+
+type TerminalLogsCacheV1 = {
+  version: 1;
+  entries: Record<string, { updatedAt: number; logs: string[] }>;
+};
+
+function readTerminalLogsCache(): TerminalLogsCacheV1 {
+  if (typeof window === 'undefined') return { version: 1, entries: {} };
+  try {
+    const raw = sessionStorage.getItem(MONITOR_TERMINAL_LOGS_STORAGE_KEY);
+    if (!raw) return { version: 1, entries: {} };
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.version !== 1 || !parsed.entries || typeof parsed.entries !== 'object') {
+      return { version: 1, entries: {} };
+    }
+    const entries: TerminalLogsCacheV1['entries'] = {};
+    for (const [k, v] of Object.entries(parsed.entries as Record<string, any>)) {
+      const key = String(k || '').trim();
+      if (!key) continue;
+      const updatedAt = typeof (v as any)?.updatedAt === 'number' ? (v as any).updatedAt : 0;
+      const logsRaw = (v as any)?.logs;
+      if (!Array.isArray(logsRaw)) continue;
+      const logs = logsRaw.filter((x: any) => typeof x === 'string' && x).slice(-MAX_TERMINAL_LOG_LINES);
+      entries[key] = { updatedAt, logs };
+    }
+    const keys = Object.keys(entries);
+    if (keys.length > MAX_TERMINAL_LOG_PORTS) {
+      const sorted = keys.sort((a, b) => (entries[a]?.updatedAt || 0) - (entries[b]?.updatedAt || 0));
+      for (let i = 0; i < sorted.length - MAX_TERMINAL_LOG_PORTS; i += 1) {
+        delete entries[sorted[i]];
+      }
+    }
+    return { version: 1, entries };
+  } catch (e) {
+    return { version: 1, entries: {} };
+  }
+}
+
+function writeTerminalLogsCache(cache: TerminalLogsCacheV1) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(MONITOR_TERMINAL_LOGS_STORAGE_KEY, JSON.stringify(cache));
+  } catch (e) {
+  }
+}
 
 export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected: boolean; portList?: string[]; onRefreshPorts?: () => void }) {
   const { t } = useTranslation();
@@ -71,6 +119,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   }, [createWidgetId]);
   const normalizePath = (p?: string) => (p || '').toLowerCase().replace(/^\\\\.\\/, '');
   const normalizeTitle = (s?: string) => (s || '').trim().toLowerCase();
+  const getDefaultTerminalLogs = useCallback(() => {
+    return [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`];
+  }, [t]);
   const getDefaultWidgetName = (type?: MonitorWidget['type']) => {
     if (type === 'clock') return t('monitor.newClock');
     if (type === 'chart') return t('monitor.newChart');
@@ -226,10 +277,43 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const longPressTriggeredRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
   const offlineGuardRanRef = useRef(false);
+  const terminalLogsCacheRef = useRef<TerminalLogsCacheV1>(readTerminalLogsCache());
+  const terminalLogsSaveTimerRef = useRef<number | null>(null);
+  const schedulePersistTerminalLogsCache = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (terminalLogsSaveTimerRef.current) {
+      window.clearTimeout(terminalLogsSaveTimerRef.current);
+      terminalLogsSaveTimerRef.current = null;
+    }
+    terminalLogsSaveTimerRef.current = window.setTimeout(() => {
+      writeTerminalLogsCache(terminalLogsCacheRef.current);
+    }, 300);
+  }, []);
+  const upsertTerminalLogsCache = useCallback((portKey: string, logs: string[]) => {
+    const entries = terminalLogsCacheRef.current.entries;
+    entries[portKey] = { updatedAt: Date.now(), logs: (logs || []).slice(-MAX_TERMINAL_LOG_LINES) };
+    const keys = Object.keys(entries);
+    if (keys.length > MAX_TERMINAL_LOG_PORTS) {
+      const sorted = keys.sort((a, b) => (entries[a]?.updatedAt || 0) - (entries[b]?.updatedAt || 0));
+      for (let i = 0; i < sorted.length - MAX_TERMINAL_LOG_PORTS; i += 1) {
+        delete entries[sorted[i]];
+      }
+    }
+    schedulePersistTerminalLogsCache();
+  }, [schedulePersistTerminalLogsCache]);
 
   useEffect(() => {
     widgetsRef.current = widgets;
   }, [widgets]);
+
+  useEffect(() => {
+    return () => {
+      if (terminalLogsSaveTimerRef.current) {
+        window.clearTimeout(terminalLogsSaveTimerRef.current);
+        terminalLogsSaveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
     const list = await serial.refreshPorts(true);
@@ -320,7 +404,13 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       showSubtitle: w.showSubtitle ?? true,
       autoSend: autoSend as { enabled: boolean; content: string; encoding: 'hex' | 'utf8' },
       displayMode,
-      logs: [`[System] ${t('monitor.systemReady')}`, `[System] ${t('monitor.waitingData')}`],
+      logs: (() => {
+        const raw = String(w.portPath || '').trim();
+        if (!raw) return getDefaultTerminalLogs();
+        const key = normalizePath(raw);
+        const cached = terminalLogsCacheRef.current.entries[key]?.logs || null;
+        return cached && cached.length ? cached : getDefaultTerminalLogs();
+      })(),
       isConnected: false
     };
   };
@@ -601,6 +691,15 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
         if (msg.type === 'serial:status') {
           const { path, status, error } = msg;
           const msgPath = normalizePath(path);
+          const errorLogs = (() => {
+            if (status !== 'error' || !error) return null;
+            const reason = inferSerialReason(String(error));
+            const anyWidget = (widgetsRef.current || []).find(w => w.type === 'terminal' && normalizePath(w.portPath) === msgPath) || null;
+            const baseLogs = terminalLogsCacheRef.current.entries[msgPath]?.logs || anyWidget?.logs || getDefaultTerminalLogs();
+            const nextLogs = [...baseLogs, `[System] ${path} 无法连接：${reason}`].slice(-MAX_TERMINAL_LOG_LINES);
+            upsertTerminalLogsCache(msgPath, nextLogs);
+            return nextLogs;
+          })();
 
           setWidgets(prev => prev.map(w => {
             const widgetPath = normalizePath(w.portPath);
@@ -617,8 +716,9 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
                   lastStatusErrorByPathRef.current[msgPath] = String(error);
                   Message.error(`${path} 无法连接：${reason}`);
                 }
-                const newLogs = [...(next.logs || []), `[System] ${path} 无法连接：${reason}`].slice(-500);
-                next = { ...next, logs: newLogs };
+                if (w.type === 'terminal' && errorLogs) {
+                  next = { ...next, logs: errorLogs };
+                }
               }
               return next;
             }
@@ -631,38 +731,38 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           const { path } = msg;
           console.log('[Monitor] Serial Opened:', path); // 调试日志
 
-          // 查找所有配置了自动发送且匹配该串口的组件
-          setWidgets(prev => {
-            // 使用函数式更新确保获取最新状态
-            const nextWidgets = prev.map(w => {
-              const widgetPath = normalizePath(w.portPath);
-              const msgPath = normalizePath(path);
+          const msgPath = normalizePath(path);
+          const targets = (widgetsRef.current || []).filter(w =>
+            w.type === 'terminal' &&
+            normalizePath(w.portPath) === msgPath &&
+            !!w.autoSend?.enabled &&
+            !!w.autoSend.content
+          );
+          let portLogs = terminalLogsCacheRef.current.entries[msgPath]?.logs
+            || targets[0]?.logs
+            || getDefaultTerminalLogs();
+          for (const w of targets) {
+            const payload = {
+              type: 'serial:send',
+              path: path,
+              data: w.autoSend!.content,
+              encoding: w.autoSend!.encoding || 'hex'
+            };
+            ws.send(JSON.stringify(payload));
+            const sentLog = `[${path}-Auto] ${w.autoSend!.content}`;
+            portLogs = [...portLogs, sentLog].slice(-MAX_TERMINAL_LOG_LINES);
+          }
+          if (targets.length) {
+            upsertTerminalLogsCache(msgPath, portLogs);
+          }
 
-              if (w.type === 'terminal' && widgetPath === msgPath && w.autoSend?.enabled && w.autoSend.content) {
-                console.log('[Monitor] Trigger AutoSend for widget:', w.id); // 调试日志
-
-                // 发送数据
-                const payload = {
-                  type: 'serial:send',
-                  path: path,
-                  data: w.autoSend.content,
-                  encoding: w.autoSend.encoding || 'hex'
-                };
-                ws.send(JSON.stringify(payload));
-
-                // 记录发送日志
-                const sentLog = `[${path}-Auto] ${w.autoSend.content}`;
-                const newLogs = [...(w.logs || []), sentLog].slice(-500);
-                return { ...w, logs: newLogs, isConnected: true }; // 顺便更新连接状态
-              }
-              // 如果只是匹配路径，也顺便更新连接状态
-              if (widgetPath === msgPath) {
-                return { ...w, isConnected: true };
-              }
-              return w;
-            });
-            return nextWidgets;
-          });
+          setWidgets(prev => prev.map(w => {
+            const widgetPath = normalizePath(w.portPath);
+            if (widgetPath !== msgPath) return w;
+            if (w.type !== 'terminal') return { ...w, isConnected: true };
+            if (targets.length) return { ...w, logs: portLogs, isConnected: true };
+            return { ...w, isConnected: true };
+          }));
         }
 
         if (msg.type === 'serial:data') {
@@ -683,21 +783,22 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
           const cleanedText = textContent.startsWith(`${path}: `) ? textContent.substring(path.length + 2) : textContent;
 
           // 分发数据到对应的组件
-          setWidgets(prev => prev.map(w => {
-            // 路径匹配逻辑优化：不区分大小写，且兼容 "COM1" 和 "\\.\COM1" 格式
-            const msgPath = normalizePath(path);
-            const widgetPath = normalizePath(w.portPath);
+          const msgPath = normalizePath(path);
+          const anyWidget = (widgetsRef.current || []).find(w => w.type === 'terminal' && normalizePath(w.portPath) === msgPath) || null;
+          const mode = anyWidget?.displayMode || 'text';
+          const payload =
+            mode === 'hex' ? hexContent :
+              mode === 'auto' ? (printableRatio >= 0.7 ? cleanedText : hexContent) :
+                cleanedText;
+          const baseLogs = terminalLogsCacheRef.current.entries[msgPath]?.logs || anyWidget?.logs || getDefaultTerminalLogs();
+          const nextLogs = [...baseLogs, `[${path}-RX] ${payload}`].slice(-MAX_TERMINAL_LOG_LINES);
+          upsertTerminalLogsCache(msgPath, nextLogs);
 
+          setWidgets(prev => prev.map(w => {
+            const widgetPath = normalizePath(w.portPath);
             if (w.type === 'terminal' && widgetPath === msgPath) {
               if (!w.isConnected) return w;
-              const mode = w.displayMode || 'text';
-              const payload =
-                mode === 'hex' ? hexContent :
-                  mode === 'auto' ? (printableRatio >= 0.7 ? cleanedText : hexContent) :
-                    cleanedText;
-
-              const newLogs = [...(w.logs || []), `[${path}-RX] ${payload}`].slice(-500);
-              return { ...w, logs: newLogs, lastRxAt: Date.now() };
+              return { ...w, logs: nextLogs, lastRxAt: Date.now() };
             }
             return w;
           }));
@@ -1234,11 +1335,15 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     };
     ws.send(JSON.stringify(payload));
 
+    const portKey = normalizePath(widget.portPath);
+    const baseLogs = terminalLogsCacheRef.current.entries[portKey]?.logs || widget.logs || getDefaultTerminalLogs();
+    const sentLog = `[${widget.portPath}-TX] ${widget.autoSend?.content}`;
+    const nextLogs = [...baseLogs, sentLog].slice(-MAX_TERMINAL_LOG_LINES);
+    upsertTerminalLogsCache(portKey, nextLogs);
+
     setWidgets(prev => prev.map(w => {
       if (w.id === widget.id) {
-        const sentLog = `[${widget.portPath}-TX] ${widget.autoSend?.content}`;
-        const newLogs = [...(w.logs || []), sentLog].slice(-500);
-        return { ...w, logs: newLogs };
+        return { ...w, logs: nextLogs };
       }
       return w;
     }));

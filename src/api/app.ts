@@ -156,7 +156,19 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
   app.get('/forwarding/logs', async (req, res) => {
     if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
     const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 2000));
-    res.json({ code: 0, msg: 'success', data: forwarding.getRecentLogs(limit) });
+    const ownerWidgetId = String(req.query.ownerWidgetId || '').trim();
+    const portPath = String(req.query.portPath || '').trim();
+    const channelId = String(req.query.channelId || '').trim();
+    res.json({
+      code: 0,
+      msg: 'success',
+      data: forwarding.getRecentLogs({
+        limit,
+        ownerWidgetId: ownerWidgetId || undefined,
+        portPath: portPath || undefined,
+        channelId: channelId || undefined
+      })
+    });
   });
 
   return app;

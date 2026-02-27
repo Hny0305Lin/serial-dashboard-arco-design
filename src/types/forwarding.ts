@@ -26,6 +26,7 @@ export interface ForwardingParseRule {
 
 export interface ForwardingSourceRule {
   enabled: boolean;
+  ownerWidgetId?: string;
   portPath: string;
   framing: ForwardingFrameRule;
   parse: ForwardingParseRule;
@@ -73,6 +74,7 @@ export type ForwardingChannelConfig = ForwardingChannelTargetConfig & {
   name: string;
   enabled: boolean;
   ownerWidgetId?: string;
+  deliveryMode?: 'at-least-once' | 'at-most-once';
   payloadFormat: ForwardingPayloadFormat;
   xmlTemplate?: string;
   compression?: ForwardingCompression;

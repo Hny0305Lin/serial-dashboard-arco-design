@@ -21,6 +21,14 @@ import { RecordStore } from './forwarding/RecordStore';
 import { HttpSender } from './forwarding/channels/HttpSender';
 
 type LogLevel = 'info' | 'warn' | 'error';
+type ForwardingLogEntry = {
+  ts: number;
+  level: LogLevel;
+  msg: string;
+  portPath?: string;
+  channelId?: string;
+  ownerWidgetId?: string;
+};
 
 export class ForwardingService {
   private portManager: PortManager;
@@ -28,6 +36,7 @@ export class ForwardingService {
   private config: ForwardingConfigV1;
   private recordStore: RecordStore;
   private baseDataDir: string;
+  private traceEnabled: boolean = String(process.env.FORWARDING_TRACE || '').trim() === '1';
   private sourceBuffers: Map<string, Buffer> = new Map();
   private channelQueues: Map<string, FileQueue<ForwardingOutboundBatch>> = new Map();
   private channelSenders: Map<string, ChannelSender> = new Map();
@@ -35,11 +44,12 @@ export class ForwardingService {
   private channelMetrics: Map<string, ForwardingChannelMetrics> = new Map();
   private channelBatchBuffers: Map<string, ForwardingRecord[]> = new Map();
   private channelFlushTimers: Map<string, NodeJS.Timeout> = new Map();
+  private channelFlushSoonTimers: Map<string, NodeJS.Timeout> = new Map();
   private channelWorkTimers: Map<string, NodeJS.Timeout> = new Map();
   private channelWorking: Set<string> = new Set();
   private channelDedup: Map<string, Map<string, number>> = new Map();
   private sourceGateActiveByPath: Map<string, boolean> = new Map();
-  private logs: { ts: number; level: LogLevel; msg: string }[] = [];
+  private logs: ForwardingLogEntry[] = [];
   private metricsListeners: Set<(m: ForwardingMetricsSnapshot) => void> = new Set();
   private alertListeners: Set<(a: any) => void> = new Set();
   private lastAlertAtByKey: Map<string, number> = new Map();
@@ -124,21 +134,103 @@ export class ForwardingService {
   }
 
   private log(level: LogLevel, msg: string): void {
-    const entry = { ts: Date.now(), level, msg };
+    const entry: ForwardingLogEntry = { ts: Date.now(), level, msg };
     this.logs.push(entry);
     if (this.logs.length > 500) this.logs.splice(0, this.logs.length - 500);
   }
 
-  public getRecentLogs(limit: number): { ts: number; level: LogLevel; msg: string }[] {
+  private logWithMeta(
+    level: LogLevel,
+    msg: string,
+    meta?: { portPath?: string; channelId?: string; ownerWidgetId?: string }
+  ): void {
+    const entry: ForwardingLogEntry = {
+      ts: Date.now(),
+      level,
+      msg,
+      portPath: meta?.portPath ? String(meta.portPath) : undefined,
+      channelId: meta?.channelId ? String(meta.channelId) : undefined,
+      ownerWidgetId: meta?.ownerWidgetId ? String(meta.ownerWidgetId) : undefined
+    };
+    this.logs.push(entry);
+    if (this.logs.length > 500) this.logs.splice(0, this.logs.length - 500);
+  }
+
+  private guessChannelPortPath(ch?: ForwardingChannelConfig): string | undefined {
+    const list = Array.isArray((ch as any)?.filter?.portPaths) ? (ch as any).filter.portPaths : [];
+    if (list.length !== 1) return undefined;
+    const p = String(list[0] || '').trim();
+    return p || undefined;
+  }
+
+  public getRecentLogs(input: number | { limit: number; ownerWidgetId?: string; portPath?: string; channelId?: string }): ForwardingLogEntry[] {
+    const limit = typeof input === 'number' ? input : input?.limit;
+    const ownerWidgetId = typeof input === 'number' ? '' : String(input?.ownerWidgetId || '').trim();
+    const portPath = typeof input === 'number' ? '' : String(input?.portPath || '').trim();
+    const channelId = typeof input === 'number' ? '' : String(input?.channelId || '').trim();
+
     const n = Math.max(0, Math.min(limit || 100, this.logs.length));
-    return this.logs.slice(this.logs.length - n);
+    if (n <= 0) return [];
+
+    const hasFilters = !!ownerWidgetId || !!portPath || !!channelId;
+    if (!hasFilters) return this.logs.slice(this.logs.length - n);
+
+    const outRev: ForwardingLogEntry[] = [];
+    for (let i = this.logs.length - 1; i >= 0 && outRev.length < n; i--) {
+      const e = this.logs[i];
+      let ok = false;
+      if (ownerWidgetId && String(e.ownerWidgetId || '') === ownerWidgetId) ok = true;
+      if (!ok && channelId && String(e.channelId || '') === channelId) ok = true;
+      if (!ok && portPath) {
+        const ep = String(e.portPath || '').trim();
+        if (ep && this.normalizePath(ep) === this.normalizePath(portPath)) ok = true;
+      }
+      if (ok) outRev.push(e);
+    }
+    return outRev.reverse();
   }
 
   public getConfig(): ForwardingConfigV1 {
     return this.config;
   }
 
+  private validateConfig(raw: ForwardingConfigV1): void {
+    const sources = Array.isArray((raw as any)?.sources) ? (raw as any).sources : [];
+    const enabledByPort = new Map<string, Array<{ portPath: string; ownerWidgetId?: string }>>();
+    for (const s of sources) {
+      if (!s || typeof s !== 'object') continue;
+      const enabled = !!(s as any).enabled;
+      const portPath = String((s as any).portPath || '').trim();
+      if (!enabled || !portPath) continue;
+      const key = this.normalizePath(portPath);
+      const ownerWidgetId = String((s as any).ownerWidgetId || '').trim() || undefined;
+      const arr = enabledByPort.get(key) || [];
+      arr.push({ portPath, ownerWidgetId });
+      enabledByPort.set(key, arr);
+    }
+    const conflicts: Array<{ portPath: string; owners: string[] }> = [];
+    for (const arr of enabledByPort.values()) {
+      if (arr.length <= 1) continue;
+      const portPath = arr[0].portPath;
+      const owners = Array.from(new Set(arr.map(x => String(x.ownerWidgetId || '(none)'))));
+      conflicts.push({ portPath, owners });
+    }
+    if (conflicts.length > 0) {
+      const msg = conflicts
+        .map(c => `${c.portPath} 被多个数据源同时启用（ownerWidgetId: ${c.owners.join(', ')}）`)
+        .join('；');
+      throw new Error(`数据源端口冲突：${msg}`);
+    }
+  }
+
+  private ownerHasEnabledChannels(ownerWidgetId?: string): boolean {
+    const owner = String(ownerWidgetId || '').trim();
+    if (!owner) return this.config.channels.some(c => !!c.enabled && !String((c as any)?.ownerWidgetId || '').trim());
+    return this.config.channels.some(c => !!c.enabled && String((c as any)?.ownerWidgetId || '').trim() === owner);
+  }
+
   public async setConfig(next: ForwardingConfigV1): Promise<void> {
+    this.validateConfig(next);
     this.applyConfig(next);
     await this.store.write(this.config);
   }
@@ -244,19 +336,88 @@ export class ForwardingService {
       .filter(c => c && typeof (c as any).id === 'string')
       .map((c: any) => {
         const next = { ...c };
+        const ownerWidgetId = String((next as any)?.ownerWidgetId || '').trim() || undefined;
         const t = String(next?.type || '').trim();
         if (t === 'http') {
           const http = next?.http && typeof next.http === 'object' ? { ...next.http } : {};
           if (typeof http.url === 'string') http.url = http.url.trim();
           if (this.isFeishuHookUrl(http.url)) next.payloadFormat = 'feishu';
           next.http = http;
+          if (next.enabled && !String(http.url || '').trim()) {
+            next.enabled = false;
+            this.logWithMeta('warn', `channel ${String(next.id)} disabled due to empty http.url`, {
+              channelId: String(next.id),
+              ownerWidgetId
+            });
+          }
+        } else if (t === 'websocket') {
+          const ws = next?.websocket && typeof next.websocket === 'object' ? { ...next.websocket } : {};
+          if (typeof ws.url === 'string') ws.url = ws.url.trim();
+          next.websocket = ws;
+          if (next.enabled && !String(ws.url || '').trim()) {
+            next.enabled = false;
+            this.logWithMeta('warn', `channel ${String(next.id)} disabled due to empty websocket.url`, {
+              channelId: String(next.id),
+              ownerWidgetId
+            });
+          }
+        } else if (t === 'tcp') {
+          const tcp = next?.tcp && typeof next.tcp === 'object' ? { ...next.tcp } : {};
+          if (typeof tcp.host === 'string') tcp.host = tcp.host.trim();
+          const port = Number((tcp as any).port || 0);
+          (tcp as any).port = Number.isFinite(port) ? port : 0;
+          next.tcp = tcp;
+          if (next.enabled && (!String(tcp.host || '').trim() || !(tcp as any).port)) {
+            next.enabled = false;
+            this.logWithMeta('warn', `channel ${String(next.id)} disabled due to invalid tcp.host/port`, {
+              channelId: String(next.id),
+              ownerWidgetId
+            });
+          }
+        } else if (t === 'mqtt') {
+          const mqtt = next?.mqtt && typeof next.mqtt === 'object' ? { ...next.mqtt } : {};
+          if (typeof mqtt.url === 'string') mqtt.url = mqtt.url.trim();
+          if (typeof mqtt.topic === 'string') mqtt.topic = mqtt.topic.trim();
+          next.mqtt = mqtt;
+          if (next.enabled && (!String(mqtt.url || '').trim() || !String(mqtt.topic || '').trim())) {
+            next.enabled = false;
+            this.logWithMeta('warn', `channel ${String(next.id)} disabled due to invalid mqtt.url/topic`, {
+              channelId: String(next.id),
+              ownerWidgetId
+            });
+          }
+        }
+        const pf = String(next?.payloadFormat || '').trim();
+        const dm = String((next as any)?.deliveryMode || '').trim();
+        if (dm !== 'at-least-once' && dm !== 'at-most-once') {
+          (next as any).deliveryMode = pf === 'feishu' ? 'at-most-once' : 'at-least-once';
         }
         return next;
       });
+    const rawSources = Array.isArray((raw as any).sources) ? (raw as any).sources : [];
+    const enabledPortKeys = new Set<string>();
+    const sources = rawSources
+      .filter((s: any) => s && typeof s.portPath === 'string')
+      .map((s: any) => {
+        const portPath = String(s.portPath || '').trim();
+        const key = this.normalizePath(portPath);
+        const ownerWidgetId = String(s.ownerWidgetId || '').trim() || undefined;
+        const enabled = !!s.enabled;
+        if (enabled && enabledPortKeys.has(key)) {
+          this.logWithMeta('error', `${portPath} 数据源端口冲突：同一端口只能启用一个数据源，已自动禁用重复项`, {
+            portPath,
+            ownerWidgetId
+          });
+          return { ...s, portPath, ownerWidgetId, enabled: false };
+        }
+        if (enabled) enabledPortKeys.add(key);
+        return { ...s, portPath, ownerWidgetId, enabled };
+      });
+
     const next: ForwardingConfigV1 = {
       version: 1,
       enabled: !!raw.enabled,
-      sources: Array.isArray(raw.sources) ? raw.sources.filter(s => s && typeof s.portPath === 'string') : [],
+      sources,
       channels: normalizedChannels,
       store: {
         maxMemoryRecords: raw.store?.maxMemoryRecords || 2000,
@@ -289,6 +450,12 @@ export class ForwardingService {
     const dataDir = this.config.store?.dataDir || path.join(process.cwd(), 'data');
     const keep = new Set(this.config.channels.map(c => c.id));
 
+    for (const [id, t] of this.channelFlushSoonTimers.entries()) {
+      if (!keep.has(id)) {
+        clearTimeout(t);
+        this.channelFlushSoonTimers.delete(id);
+      }
+    }
     for (const [id, t] of this.channelFlushTimers.entries()) {
       if (!keep.has(id)) {
         clearInterval(t);
@@ -356,6 +523,20 @@ export class ForwardingService {
         this.channelWorkTimers.set(ch.id, t);
       }
     }
+  }
+
+  private shouldDropRetryOnSendError(ch: ForwardingChannelConfig, errMsg: string): boolean {
+    const mode = String((ch as any)?.deliveryMode || '').trim() || 'at-least-once';
+    if (mode !== 'at-most-once') return false;
+    const s = String(errMsg || '').toLowerCase();
+    if (!s) return false;
+    if (s.includes('timeout')) return true;
+    if (s.includes('socket hang up')) return true;
+    if (s.includes('econnreset')) return true;
+    if (s.includes('etimedout')) return true;
+    if (s.includes('ehostunreach')) return true;
+    if (s.includes('enetunreach')) return true;
+    return false;
   }
 
   public getMetricsSnapshot(): ForwardingMetricsSnapshot {
@@ -463,12 +644,23 @@ export class ForwardingService {
   }
 
   private async onRawData(portPath: string, chunk: Buffer): Promise<void> {
-    const src = this.config.sources.find(s => s.enabled && this.normalizePath(s.portPath) === this.normalizePath(portPath));
+    const matches = this.config.sources.filter(s => s.enabled && this.normalizePath(s.portPath) === this.normalizePath(portPath));
+    if (matches.length === 0) return;
+    let src: any = null;
+    let srcOwnerWidgetId: string | undefined;
+    for (const s of matches) {
+      const owner = String((s as any).ownerWidgetId || '').trim() || undefined;
+      if (this.ownerHasEnabledChannels(owner)) {
+        src = s;
+        srcOwnerWidgetId = owner;
+        break;
+      }
+    }
     if (!src) return;
     const prev = this.sourceBuffers.get(src.portPath) || Buffer.alloc(0);
     const { frames, rest, droppedBytes } = extractFrames(prev, chunk, src.framing);
     this.sourceBuffers.set(src.portPath, rest);
-    if (droppedBytes > 0) this.log('warn', `${src.portPath} framing dropped ${droppedBytes} bytes`);
+    if (droppedBytes > 0) this.logWithMeta('warn', `${src.portPath} framing dropped ${droppedBytes} bytes`, { portPath: src.portPath });
 
     for (const frame of frames) {
       const gateText = String((src as any).startOnText || '').trim();
@@ -515,7 +707,7 @@ export class ForwardingService {
         await this.recordStore.append(rec);
       } catch (e) {
       }
-      await this.dispatchRecord(rec);
+      await this.dispatchRecord(rec, srcOwnerWidgetId);
     }
   }
 
@@ -559,9 +751,16 @@ export class ForwardingService {
     return true;
   }
 
-  private async dispatchRecord(rec: ForwardingRecord): Promise<void> {
+  private async dispatchRecord(rec: ForwardingRecord, ownerWidgetId?: string): Promise<void> {
+    const owner = String(ownerWidgetId || '').trim() || undefined;
     for (const ch of this.config.channels) {
       if (!ch.enabled) continue;
+      const chOwner = String((ch as any)?.ownerWidgetId || '').trim() || undefined;
+      if (owner) {
+        if (chOwner !== owner) continue;
+      } else {
+        if (chOwner) continue;
+      }
       if (!this.matchChannelFilter(ch, rec)) continue;
       if (!this.dedupAccept(ch.id, ch, rec)) {
         const m = this.channelMetrics.get(ch.id);
@@ -569,11 +768,33 @@ export class ForwardingService {
         continue;
       }
       const buf = this.channelBatchBuffers.get(ch.id) || [];
+      const wasEmpty = buf.length === 0;
       buf.push(rec);
       this.channelBatchBuffers.set(ch.id, buf);
       const batchSize = Math.max(1, (ch.batchSize ?? 20));
       if (buf.length >= batchSize) {
+        const t = this.channelFlushSoonTimers.get(ch.id);
+        if (t) {
+          clearTimeout(t);
+          this.channelFlushSoonTimers.delete(ch.id);
+        }
         await this.flushChannelBuffer(ch.id);
+      } else if (wasEmpty) {
+        if (!this.channelFlushSoonTimers.has(ch.id)) {
+          const delay = Math.max(0, Math.min(50, Number(ch.flushIntervalMs ?? 1000)));
+          const timer = setTimeout(() => {
+            this.channelFlushSoonTimers.delete(ch.id);
+            this.flushChannelBuffer(ch.id).catch(() => undefined);
+          }, delay);
+          this.channelFlushSoonTimers.set(ch.id, timer);
+          if (this.traceEnabled) {
+            this.logWithMeta('info', `channel ${ch.id} scheduled flush in ${delay}ms`, {
+              channelId: ch.id,
+              ownerWidgetId: chOwner,
+              portPath: rec.portPath
+            });
+          }
+        }
       }
     }
     this.emitMetrics();
@@ -587,6 +808,11 @@ export class ForwardingService {
   private async flushChannelBuffer(channelId: string): Promise<void> {
     const ch = this.config.channels.find(c => c.id === channelId);
     if (!ch || !ch.enabled) return;
+    const t = this.channelFlushSoonTimers.get(channelId);
+    if (t) {
+      clearTimeout(t);
+      this.channelFlushSoonTimers.delete(channelId);
+    }
     const buf = this.channelBatchBuffers.get(channelId);
     if (!buf || buf.length === 0) return;
 
@@ -610,6 +836,15 @@ export class ForwardingService {
       await q.enqueue(batch, { id: batch.id });
       const m = this.channelMetrics.get(channelId);
       if (m) m.queueLength = await q.size();
+      this.workChannelQueue(channelId).catch(() => undefined);
+      if (this.traceEnabled) {
+        const ownerWidgetId = String((ch as any).ownerWidgetId || '').trim() || undefined;
+        this.logWithMeta('info', `channel ${channelId} enqueued batch ${batch.id} records=${records.length}`, {
+          channelId,
+          ownerWidgetId,
+          portPath: records[0]?.portPath
+        });
+      }
     } catch (e: any) {
       const errMsg = e instanceof Error ? e.message : String(e);
       const m = this.channelMetrics.get(channelId);
@@ -617,7 +852,13 @@ export class ForwardingService {
         m.failed += 1;
         m.lastError = errMsg;
       }
-      this.log('error', `channel ${channelId} enqueue failed: ${errMsg}`);
+      const ch = this.config.channels.find(c => c.id === channelId);
+      const ownerWidgetId = ch ? String((ch as any).ownerWidgetId || '').trim() : '';
+      this.logWithMeta('error', `channel ${channelId} enqueue failed: ${errMsg}`, {
+        channelId,
+        ownerWidgetId: ownerWidgetId || undefined,
+        portPath: this.guessChannelPortPath(ch)
+      });
       return;
     }
     this.emitMetrics();
@@ -673,7 +914,12 @@ export class ForwardingService {
             m.failed += 1;
             m.dropped += 1;
           }
-          this.log('error', `channel ${channelId} drop batch ${batch.id} after ${attempts} attempts`);
+          const ownerWidgetId = ch ? String((ch as any).ownerWidgetId || '').trim() : '';
+          this.logWithMeta('error', `channel ${channelId} drop batch ${batch.id} after ${attempts} attempts`, {
+            channelId,
+            ownerWidgetId: ownerWidgetId || undefined,
+            portPath: this.guessChannelPortPath(ch)
+          });
           processed += 1;
           continue;
         }
@@ -681,6 +927,14 @@ export class ForwardingService {
         const built = buildOutboundPayload(batch, { xmlTemplate: ch.xmlTemplate });
         try {
           const sender = this.senderForChannel(ch);
+          if (this.traceEnabled) {
+            const ownerWidgetId = String((ch as any).ownerWidgetId || '').trim() || undefined;
+            this.logWithMeta('info', `channel ${channelId} sending batch ${batch.id} records=${(batch as any)?.records?.length || 0}`, {
+              channelId,
+              ownerWidgetId,
+              portPath: (batch as any)?.records?.[0]?.portPath
+            });
+          }
           const res = await sender.send(built.body, built.headers, { idempotencyKey: batch.id });
           await q.ack(filePath);
           if (m) {
@@ -696,10 +950,26 @@ export class ForwardingService {
             m.failed += 1;
             m.lastError = errMsg;
           }
-          const delay = Math.min(60_000, baseDelay * Math.pow(2, attempts));
-          const nextAttemptAt = Date.now() + delay;
-          await q.nack(filePath, item, nextAttemptAt);
-          this.log('warn', `channel ${channelId} send failed: ${errMsg}`);
+          if (this.shouldDropRetryOnSendError(ch, errMsg)) {
+            await q.ack(filePath);
+            if (m) m.dropped += 1;
+            const ownerWidgetId = ch ? String((ch as any).ownerWidgetId || '').trim() : '';
+            this.logWithMeta('warn', `channel ${channelId} drop batch ${batch.id} after send error: ${errMsg}`, {
+              channelId,
+              ownerWidgetId: ownerWidgetId || undefined,
+              portPath: this.guessChannelPortPath(ch)
+            });
+          } else {
+            const delay = Math.min(60_000, baseDelay * Math.pow(2, attempts));
+            const nextAttemptAt = Date.now() + delay;
+            await q.nack(filePath, item, nextAttemptAt);
+            const ownerWidgetId = ch ? String((ch as any).ownerWidgetId || '').trim() : '';
+            this.logWithMeta('warn', `channel ${channelId} send failed: ${errMsg}`, {
+              channelId,
+              ownerWidgetId: ownerWidgetId || undefined,
+              portPath: this.guessChannelPortPath(ch)
+            });
+          }
         }
 
         processed += 1;
@@ -714,8 +984,10 @@ export class ForwardingService {
   public async shutdown(): Promise<void> {
     for (const t of this.channelFlushTimers.values()) clearInterval(t);
     for (const t of this.channelWorkTimers.values()) clearInterval(t);
+    for (const t of this.channelFlushSoonTimers.values()) clearTimeout(t);
     this.channelFlushTimers.clear();
     this.channelWorkTimers.clear();
+    this.channelFlushSoonTimers.clear();
     const closers = Array.from(this.channelSenders.values()).map(s => s.close().catch(() => undefined));
     this.channelSenders.clear();
     await Promise.all(closers);
