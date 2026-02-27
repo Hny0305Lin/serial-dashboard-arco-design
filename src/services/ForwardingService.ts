@@ -38,6 +38,9 @@ export class ForwardingService {
   private baseDataDir: string;
   private traceEnabled: boolean = String(process.env.FORWARDING_TRACE || '').trim() === '1';
   private sourceBuffers: Map<string, Buffer> = new Map();
+  private portEpochByPath: Map<string, number> = new Map();
+  private portSessionIdByPath: Map<string, string> = new Map();
+  private portSeqByPath: Map<string, number> = new Map();
   private channelQueues: Map<string, FileQueue<ForwardingOutboundBatch>> = new Map();
   private channelSenders: Map<string, ChannelSender> = new Map();
   private channelSenderKeyById: Map<string, string> = new Map();
@@ -129,8 +132,73 @@ export class ForwardingService {
       if (!cfg.enabled) return;
       const portPath = String(event.path || '');
       const data: Buffer = Buffer.isBuffer(event.data) ? event.data : Buffer.from(event.data);
-      this.onRawData(portPath, data).catch(() => undefined);
+      const sessionId = String(event.sessionId || '').trim() || undefined;
+      this.onRawData(portPath, data, { sessionId }).catch(() => undefined);
     });
+    this.portManager.on('status', (event: any) => {
+      const portPath = String(event?.path || '').trim();
+      if (!portPath) return;
+      const status = String(event?.status || '').trim();
+      const sessionId = String(event?.sessionId || '').trim() || undefined;
+      this.onPortStatus(portPath, status, sessionId);
+    });
+  }
+
+  private currentPortEpoch(normPath: string): number | undefined {
+    return this.portEpochByPath.get(normPath);
+  }
+
+  private onPortStatus(portPath: string, status: string, sessionId?: string): void {
+    const norm = this.normalizePath(portPath);
+    if (!norm) return;
+
+    if (status === 'open') {
+      const nextEpoch = (this.portEpochByPath.get(norm) || 0) + 1;
+      this.portEpochByPath.set(norm, nextEpoch);
+      if (sessionId) this.portSessionIdByPath.set(norm, sessionId);
+      this.portSeqByPath.set(norm, 0);
+      this.clearSourceStateForPath(norm);
+      this.logWithMeta('info', `port ${portPath} opened session=${sessionId || 'unknown'} epoch=${nextEpoch}`, { portPath });
+      return;
+    }
+
+    if (status === 'closed' || status === 'error') {
+      this.clearSourceStateForPath(norm);
+      this.dropBufferedRecordsForPort(norm);
+      this.logWithMeta('warn', `port ${portPath} ${status} session=${sessionId || 'unknown'}`, { portPath });
+      return;
+    }
+  }
+
+  private clearSourceStateForPath(normPath: string): void {
+    for (const s of this.config.sources) {
+      const k = this.normalizePath(s.portPath);
+      if (!k || k !== normPath) continue;
+      this.sourceBuffers.delete(s.portPath);
+      const gate = String((s as any).startOnText || '').trim();
+      this.sourceGateActiveByPath.set(k, gate ? false : true);
+    }
+  }
+
+  private dropBufferedRecordsForPort(normPath: string): void {
+    for (const ch of this.config.channels) {
+      const buf = this.channelBatchBuffers.get(ch.id);
+      if (!buf || buf.length === 0) continue;
+      const before = buf.length;
+      const kept = buf.filter(r => this.normalizePath(r.portPath) !== normPath);
+      const dropped = before - kept.length;
+      if (dropped <= 0) continue;
+      this.channelBatchBuffers.set(ch.id, kept);
+      const m = this.channelMetrics.get(ch.id);
+      if (m) m.dropped += dropped;
+      const ownerWidgetId = String((ch as any).ownerWidgetId || '').trim() || undefined;
+      this.logWithMeta('warn', `channel ${ch.id} dropped ${dropped} buffered records due to port disconnect`, {
+        channelId: ch.id,
+        ownerWidgetId,
+        portPath: ch.filter?.portPaths?.[0]
+      });
+    }
+    this.emitMetrics();
   }
 
   private log(level: LogLevel, msg: string): void {
@@ -639,11 +707,66 @@ export class ForwardingService {
     return this.recordStore.getRecent(limit);
   }
 
+  public async getQueueSnapshot(input?: { channelId?: string; limit?: number }): Promise<any> {
+    const channelId = String(input?.channelId || '').trim();
+    const limit = Math.max(1, Math.min(Number(input?.limit || 10), 50));
+    const ids = channelId ? [channelId] : this.config.channels.map(c => c.id);
+    const ports: Array<{ portPath: string; epoch?: number; sessionId?: string }> = [];
+    for (const s of this.config.sources) {
+      const k = this.normalizePath(s.portPath);
+      if (!k) continue;
+      ports.push({
+        portPath: s.portPath,
+        epoch: this.portEpochByPath.get(k),
+        sessionId: this.portSessionIdByPath.get(k)
+      });
+    }
+
+    const channels: any[] = [];
+    for (const id of ids) {
+      const q = this.channelQueues.get(id);
+      if (!q) continue;
+      const inspected = await q.inspect(limit);
+      const mapped = inspected.items.map(x => {
+        const it: any = x.item;
+        const payload: any = it?.payload;
+        const recs: any[] = Array.isArray(payload?.records) ? payload.records : [];
+        return {
+          file: x.file,
+          error: x.error,
+          item: it
+            ? {
+              id: it.id,
+              createdAt: it.createdAt,
+              attempts: it.attempts,
+              nextAttemptAt: it.nextAttemptAt
+            }
+            : null,
+          batch: payload
+            ? {
+              id: payload.id,
+              channelId: payload.channelId,
+              createdAt: payload.createdAt,
+              records: recs.length,
+              firstRecordId: recs[0]?.id,
+              firstRecordTs: recs[0]?.ts,
+              portEpochByPath: payload.portEpochByPath,
+              portSessionIdByPath: payload.portSessionIdByPath
+            }
+            : null
+        };
+      });
+      channels.push({ channelId: id, size: inspected.size, items: mapped });
+    }
+
+    return { ts: Date.now(), enabled: this.config.enabled, ports, channels };
+  }
+
   private normalizePath(p: string): string {
     return String(p || '').toLowerCase().replace(/^\\\\.\\/, '');
   }
 
-  private async onRawData(portPath: string, chunk: Buffer): Promise<void> {
+  private async onRawData(portPath: string, chunk: Buffer, ctx?: { sessionId?: string }): Promise<void> {
     const matches = this.config.sources.filter(s => s.enabled && this.normalizePath(s.portPath) === this.normalizePath(portPath));
     if (matches.length === 0) return;
     let src: any = null;
@@ -684,14 +807,21 @@ export class ForwardingService {
           }
         }
       }
+      const norm = this.normalizePath(src.portPath);
+      const sessionId = ctx?.sessionId || this.portSessionIdByPath.get(norm);
+      const seq = (this.portSeqByPath.get(norm) || 0) + 1;
+      this.portSeqByPath.set(norm, seq);
+
       let rec = parseFrameToRecord(frame, { portPath: src.portPath, parse: src.parse });
       if (!rec) {
         if (gateHit) {
           const ts = Date.now();
           rec = {
-            id: `${ts}-${Math.random().toString(16).slice(2)}`,
+            id: `${sessionId || 'nosess'}-${seq}`,
             ts,
             portPath: src.portPath,
+            portSessionId: sessionId,
+            seq,
             payloadText: frameText,
             rawBytesBase64: frame.toString('base64'),
             hash: sha256Hex(frame)
@@ -700,6 +830,7 @@ export class ForwardingService {
           continue;
         }
       }
+      rec = { ...rec, id: `${sessionId || 'nosess'}-${seq}`, portSessionId: sessionId, seq };
       if (gateHit) {
         rec = { ...rec, deviceId: undefined, dataType: undefined, payloadJson: undefined, payloadText: frameText };
       }
@@ -822,11 +953,23 @@ export class ForwardingService {
 
     const q = this.channelQueues.get(channelId);
     if (!q) return;
+    const portEpochByPath: Record<string, number> = {};
+    const portSessionIdByPath: Record<string, string> = {};
+    for (const r of records) {
+      const k = this.normalizePath(r.portPath);
+      if (!k) continue;
+      const epoch = this.portEpochByPath.get(k);
+      if (typeof epoch === 'number') portEpochByPath[k] = epoch;
+      const sid = this.portSessionIdByPath.get(k);
+      if (sid) portSessionIdByPath[k] = sid;
+    }
     const batch: ForwardingOutboundBatch = {
       id: this.makeBatchId(channelId),
       channelId,
       createdAt: Date.now(),
       records,
+      portEpochByPath: Object.keys(portEpochByPath).length ? portEpochByPath : undefined,
+      portSessionIdByPath: Object.keys(portSessionIdByPath).length ? portSessionIdByPath : undefined,
       payloadFormat: ch.payloadFormat || 'json',
       compression: ch.compression || 'none',
       encryption: ch.encryption || 'none',
@@ -903,6 +1046,37 @@ export class ForwardingService {
           await q.ack(filePath);
           processed += 1;
           continue;
+        }
+
+        const dropStale = (ch as any).dropStaleBatchesOnPortReopen !== false;
+        if (dropStale) {
+          const reasons: string[] = [];
+          const epochs = (batch as any).portEpochByPath as Record<string, number> | undefined;
+          if (epochs && typeof epochs === 'object') {
+            for (const [k, v] of Object.entries(epochs)) {
+              const cur = this.currentPortEpoch(String(k));
+              if (typeof cur === 'number' && cur !== v) reasons.push(`${k}:epoch ${v}->${cur}`);
+            }
+          }
+          const sessions = (batch as any).portSessionIdByPath as Record<string, string> | undefined;
+          if (sessions && typeof sessions === 'object') {
+            for (const [k, v] of Object.entries(sessions)) {
+              const cur = this.portSessionIdByPath.get(String(k));
+              if (cur && cur !== v) reasons.push(`${k}:session ${v}->${cur}`);
+            }
+          }
+          if (reasons.length > 0) {
+            await q.ack(filePath);
+            if (m) m.dropped += 1;
+            const ownerWidgetId = ch ? String((ch as any).ownerWidgetId || '').trim() : '';
+            this.logWithMeta('warn', `channel ${channelId} drop stale batch ${batch.id} (${reasons.join(', ')})`, {
+              channelId,
+              ownerWidgetId: ownerWidgetId || undefined,
+              portPath: this.guessChannelPortPath(ch)
+            });
+            processed += 1;
+            continue;
+          }
         }
 
         const maxAttempts = Math.max(0, (ch.retryMaxAttempts ?? 10));

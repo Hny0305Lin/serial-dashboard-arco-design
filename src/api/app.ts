@@ -171,5 +171,17 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
     });
   });
 
+  app.get('/forwarding/queues', async (req, res) => {
+    if (!forwarding) return res.status(404).json({ code: 404, msg: 'Forwarding service not enabled' });
+    const channelId = String(req.query.channelId || '').trim();
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 10), 50));
+    try {
+      const data = await forwarding.getQueueSnapshot({ channelId: channelId || undefined, limit });
+      res.json({ code: 0, msg: 'success', data });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
   return app;
 }

@@ -75,6 +75,7 @@ export type ForwardingChannelConfig = ForwardingChannelTargetConfig & {
   enabled: boolean;
   ownerWidgetId?: string;
   deliveryMode?: 'at-least-once' | 'at-most-once';
+  dropStaleBatchesOnPortReopen?: boolean;
   payloadFormat: ForwardingPayloadFormat;
   xmlTemplate?: string;
   compression?: ForwardingCompression;
@@ -117,6 +118,8 @@ export interface ForwardingRecord {
   id: string;
   ts: number;
   portPath: string;
+  portSessionId?: string;
+  seq?: number;
   deviceId?: string;
   dataType?: string;
   payloadText?: string;
@@ -131,6 +134,8 @@ export interface ForwardingOutboundBatch {
   channelId: string;
   createdAt: number;
   records: ForwardingRecord[];
+  portEpochByPath?: Record<string, number>;
+  portSessionIdByPath?: Record<string, string>;
   payloadFormat: ForwardingPayloadFormat;
   compression: ForwardingCompression;
   encryption: ForwardingEncryption;

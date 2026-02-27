@@ -8,6 +8,7 @@ interface ManagedPort {
   parser?: PacketParser;
   config: SerialConfig;
   status: PortStatus;
+  sessionId: string;
   reconnectAttempts: number;
   reconnectTimer?: NodeJS.Timeout;
 }
@@ -104,6 +105,8 @@ export class PortManager extends EventEmitter {
       return Promise.resolve();
     }
 
+    const sessionId = managed.sessionId;
+
     // 1. 立即从管理列表中移除，防止触发自动重连逻辑
     this.ports.delete(path);
 
@@ -125,7 +128,7 @@ export class PortManager extends EventEmitter {
 
       // 无论如何，我们都认为这个端口在逻辑上已经关闭了
       // 即使底层 close 报错，也不影响我们清理 map
-      this.updateStatus(path, 'closed');
+      this.updateStatus(path, 'closed', undefined, { sessionId });
 
       // 强制清理引用，防止内存泄漏或状态残留
       // 如果 SerialPort 实例有 destroy 方法，也应该调用（虽然 v10+ 主要靠 close）
@@ -210,6 +213,7 @@ export class PortManager extends EventEmitter {
       instance: port,
       config,
       status: 'opening',
+      sessionId: `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`,
       reconnectAttempts: 0
     };
 
@@ -227,7 +231,7 @@ export class PortManager extends EventEmitter {
           console.error(`Failed to open port ${path}:`, err.message);
           this.setLastError(path, err.message);
           this.ports.delete(path);
-          this.updateStatus(path, 'error', err);
+          this.updateStatus(path, 'error', err, { sessionId: managed.sessionId });
           try { port.removeAllListeners(); } catch (e) { }
           if ((port as any).destroy) {
             try { (port as any).destroy(); } catch (e) { }
@@ -257,12 +261,12 @@ export class PortManager extends EventEmitter {
       console.log(`[PortManager] Config: BaudRate=${config.baudRate}, Data=${config.dataBits}, Stop=${config.stopBits}, Parity=${config.parity}`);
 
       managed.reconnectAttempts = 0;
-      this.updateStatus(path, 'open');
+      this.updateStatus(path, 'open', undefined, { sessionId: managed.sessionId });
 
       if (process.env.SERIAL_PIPELINE_PROBE === '1') {
         setTimeout(() => {
           const testMsg = Buffer.from(`[System] Port ${path} opened. Pipeline check OK.`);
-          this.emit('data', { path, data: testMsg });
+          this.emit('data', { path, data: testMsg, sessionId: managed.sessionId });
         }, 500);
       }
     });
@@ -273,20 +277,20 @@ export class PortManager extends EventEmitter {
         if (process.env.SERIAL_RAW_LOG === '1') {
           console.log(`[PortManager] RAW DATA from ${path} (Length: ${chunk.length}):`, chunk.toString('hex').toUpperCase());
         }
-        this.emit('data', { path, data: chunk });
+        this.emit('data', { path, data: chunk, sessionId: managed.sessionId });
       }
     });
 
     // 监听 error 事件
     instance.on('error', (err) => {
       console.error(`Port ${path} error:`, err.message);
-      this.updateStatus(path, 'error', err);
+      this.updateStatus(path, 'error', err, { sessionId: managed.sessionId });
     });
 
     // 监听 close 事件
     instance.on('close', () => {
       console.log(`Port ${path} closed.`);
-      this.updateStatus(path, 'closed');
+      this.updateStatus(path, 'closed', undefined, { sessionId: managed.sessionId });
 
       // 意外关闭处理策略：
       // 如果是非手动关闭（map 中还存在），说明是意外断开（如拔线）
@@ -303,7 +307,7 @@ export class PortManager extends EventEmitter {
     });
   }
 
-  private updateStatus(path: string, status: PortStatus, error?: Error) {
+  private updateStatus(path: string, status: PortStatus, error?: Error, meta?: { sessionId?: string }) {
     console.log(`[PortManager] updateStatus called: ${path} -> ${status}`);
     this.setLastStatus(path, status);
     const managed = this.ports.get(path);
@@ -314,6 +318,7 @@ export class PortManager extends EventEmitter {
       path,
       status,
       error: error?.message,
+      sessionId: meta?.sessionId || managed?.sessionId,
       timestamp: Date.now()
     });
     console.log(`[PortManager] Emitted status event: ${path} -> ${status}`);

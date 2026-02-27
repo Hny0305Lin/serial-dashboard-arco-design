@@ -59,6 +59,25 @@ export class FileQueue<T> {
     return entries.filter(e => e.endsWith('.json')).sort();
   }
 
+  public async inspect(limit?: number): Promise<{ size: number; items: Array<{ file: string; item: FileQueueItem<T> | null; error?: string }> }> {
+    const files = await this.listItemFiles();
+    const size = files.length;
+    const n = Math.max(0, Math.min(typeof limit === 'number' ? limit : 20, files.length));
+    const items: Array<{ file: string; item: FileQueueItem<T> | null; error?: string }> = [];
+    for (let i = 0; i < n; i++) {
+      const file = files[i];
+      const filePath = path.join(this.dir, file);
+      try {
+        const raw = await fs.readFile(filePath, 'utf8');
+        const item = JSON.parse(raw) as FileQueueItem<T>;
+        items.push({ file, item });
+      } catch (e: any) {
+        items.push({ file, item: null, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return { size, items };
+  }
+
   public async peekReady(nowTs?: number): Promise<{ filePath: string; item: FileQueueItem<T> } | null> {
     const now = typeof nowTs === 'number' ? nowTs : Date.now();
     const files = await this.listItemFiles();
