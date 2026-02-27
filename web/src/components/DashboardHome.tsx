@@ -62,6 +62,18 @@ export default function DashboardHome(props: DashboardHomeProps) {
   const history = useHistory();
   const targetPortLabelId = React.useId();
   const sendContentLabelId = React.useId();
+  const srOnlyStyle: React.CSSProperties = {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    padding: 0,
+    margin: -1,
+    overflow: 'hidden',
+    clip: 'rect(0, 0, 0, 0)',
+    clipPath: 'inset(50%)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  };
   const {
     totalPortsCount,
     activePortsCount,
@@ -257,12 +269,18 @@ export default function DashboardHome(props: DashboardHomeProps) {
                   <Radio.Group type="button" value={viewMode} onChange={setViewMode} size="small">
                     <Radio value="list">
                       <Tooltip content={t('tooltip.listView')}>
-                        <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconList /></div>
+                        <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>
+                          <IconList />
+                          <span style={srOnlyStyle}>{t('tooltip.listView')}</span>
+                        </div>
                       </Tooltip>
                     </Radio>
                     <Radio value="grid">
                       <Tooltip content={t('tooltip.gridView')}>
-                        <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}><IconApps /></div>
+                        <div style={{ display: 'flex', alignItems: 'center', height: '100%' }}>
+                          <IconApps />
+                          <span style={srOnlyStyle}>{t('tooltip.gridView')}</span>
+                        </div>
                       </Tooltip>
                     </Radio>
                   </Radio.Group>

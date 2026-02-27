@@ -43,6 +43,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const { ws, wsConnected, portList = [], onRefreshPorts } = props;
   const serial = useSerialPortController({ ws });
   const [widgets, setWidgets] = useState<MonitorWidget[]>(INITIAL_WIDGETS);
+  const widgetsRef = useRef<MonitorWidget[]>(INITIAL_WIDGETS);
   const createWidgetId = useCallback((used?: Set<string>) => {
     const gen = () => {
       const anyCrypto = (globalThis as any)?.crypto;
@@ -224,6 +225,11 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
   const lastStatusErrorByPathRef = useRef<Record<string, string>>({});
+  const offlineGuardRanRef = useRef(false);
+
+  useEffect(() => {
+    widgetsRef.current = widgets;
+  }, [widgets]);
 
   const syncConnectionsFromServer = async (seed?: MonitorWidget[]) => {
     const list = await serial.refreshPorts(true);
@@ -434,6 +440,114 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
     applyImportedLayout(parsed, { toast: false }).catch(() => undefined);
   }, []);
+
+  const runOfflineGuard = useCallback(async () => {
+    const list = await serial.refreshPorts(true);
+    const portsList = list || serial.allPorts;
+    const existKeys = new Set<string>((portsList || []).map(p => normalizePath(p.path)));
+
+    const currentWidgets = widgetsRef.current || [];
+    const terminalPorts = Array.from(
+      new Set<string>(
+        currentWidgets
+          .filter(w => w.type === 'terminal')
+          .map(w => String(w.portPath || '').trim())
+          .filter(Boolean)
+      )
+    );
+    const missingTerminalPorts = terminalPorts.filter(p => !existKeys.has(normalizePath(p)));
+
+    if (missingTerminalPorts.length > 0) {
+      for (const p of missingTerminalPorts) {
+        try {
+          await serial.closePort(p);
+        } catch (e) {
+        }
+      }
+      setWidgets(prev =>
+        prev.map(w => {
+          if (w.type !== 'terminal') return w;
+          const path = String(w.portPath || '').trim();
+          if (!path) return w;
+          if (missingTerminalPorts.some(x => normalizePath(x) === normalizePath(path))) {
+            if (!w.isConnected) return w;
+            return { ...w, isConnected: false };
+          }
+          return w;
+        })
+      );
+      for (const p of missingTerminalPorts) {
+        Message.warning(`${p} 串口未链接，已先关闭 ${p} 终端。`);
+      }
+    }
+
+    let forwardingConfig: any = null;
+    try {
+      const { res, json } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`);
+      if (res.ok && json?.code === 0) forwardingConfig = json?.data || null;
+    } catch (e) {
+    }
+    if (!forwardingConfig) return;
+
+    const sources = Array.isArray(forwardingConfig?.sources) ? forwardingConfig.sources : [];
+    const channels = Array.isArray(forwardingConfig?.channels) ? forwardingConfig.channels : [];
+    const forwardingRunning =
+      !!forwardingConfig?.enabled ||
+      sources.some((s: any) => !!s?.enabled) ||
+      channels.some((c: any) => !!c?.enabled);
+
+    if (!forwardingRunning) return;
+
+    const missingSourcePorts = Array.from(
+      new Set<string>(
+        sources
+          .map((s: any) => String(s?.portPath || '').trim())
+          .filter(Boolean)
+          .filter((p: string) => !existKeys.has(normalizePath(p)))
+      )
+    );
+    const disableBecauseNoPorts = existKeys.size === 0;
+    const shouldDisable = disableBecauseNoPorts || missingSourcePorts.length > 0;
+    if (!shouldDisable) return;
+
+    const nextSources = sources.map((s: any) => {
+      if (disableBecauseNoPorts) return { ...s, enabled: false };
+      const portPath = String(s?.portPath || '').trim();
+      if (!portPath) return s;
+      if (!existKeys.has(normalizePath(portPath))) return { ...s, enabled: false };
+      return s;
+    });
+    const anySourceEnabled = nextSources.some((s: any) => !!s?.enabled);
+    const nextChannels = anySourceEnabled ? channels : channels.map((c: any) => (c?.enabled ? { ...c, enabled: false } : c));
+    const nextEnabled = anySourceEnabled ? !!forwardingConfig?.enabled : false;
+    const nextCfg = { ...forwardingConfig, enabled: nextEnabled, sources: nextSources, channels: nextChannels };
+
+    try {
+      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextCfg)
+      });
+      if (!res.ok || json?.code !== 0) throw new Error(text || String(json?.msg || 'save failed'));
+    } catch (e) {
+    }
+
+    const toastPorts = missingSourcePorts.length > 0 ? missingSourcePorts : missingTerminalPorts;
+    if (toastPorts.length > 0) {
+      for (const p of toastPorts) {
+        Message.warning(`${p} 串口未链接，已先关闭 ${p} 转发。`);
+      }
+    } else {
+      Message.warning('未检测到可用串口，已先关闭转发。');
+    }
+  }, [serial, normalizePath]);
+
+  useEffect(() => {
+    if (!restoreChecked) return;
+    if (offlineGuardRanRef.current) return;
+    offlineGuardRanRef.current = true;
+    runOfflineGuard().catch(() => undefined);
+  }, [restoreChecked, runOfflineGuard]);
 
   useEffect(() => {
     if (!restoreChecked) return;

@@ -27,6 +27,7 @@ export class ForwardingService {
   private store: JsonFileStore<ForwardingConfigV1>;
   private config: ForwardingConfigV1;
   private recordStore: RecordStore;
+  private baseDataDir: string;
   private sourceBuffers: Map<string, Buffer> = new Map();
   private channelQueues: Map<string, FileQueue<ForwardingOutboundBatch>> = new Map();
   private channelSenders: Map<string, ChannelSender> = new Map();
@@ -46,6 +47,7 @@ export class ForwardingService {
   constructor(opts: { portManager: PortManager; configPath: string; dataDir: string }) {
     this.portManager = opts.portManager;
     this.store = new JsonFileStore<ForwardingConfigV1>(opts.configPath);
+    this.baseDataDir = String(opts.dataDir || '').trim();
     this.config = this.defaultConfig(opts.dataDir);
     this.recordStore = new RecordStore({
       dir: path.join(opts.dataDir, 'records'),
@@ -237,7 +239,7 @@ export class ForwardingService {
   }
 
   private applyConfig(raw: ForwardingConfigV1): void {
-    const dataDir = raw.store?.dataDir || this.config.store?.dataDir || path.join(process.cwd(), 'data');
+    const dataDir = this.baseDataDir || this.config.store?.dataDir || path.join(process.cwd(), 'data');
     const normalizedChannels = (Array.isArray(raw.channels) ? raw.channels : [])
       .filter(c => c && typeof (c as any).id === 'string')
       .map((c: any) => {
@@ -604,9 +606,20 @@ export class ForwardingService {
       encryption: ch.encryption || 'none',
       encryptionKeyId: ch.encryptionKeyId
     };
-    await q.enqueue(batch, { id: batch.id });
-    const m = this.channelMetrics.get(channelId);
-    if (m) m.queueLength = await q.size();
+    try {
+      await q.enqueue(batch, { id: batch.id });
+      const m = this.channelMetrics.get(channelId);
+      if (m) m.queueLength = await q.size();
+    } catch (e: any) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      const m = this.channelMetrics.get(channelId);
+      if (m) {
+        m.failed += 1;
+        m.lastError = errMsg;
+      }
+      this.log('error', `channel ${channelId} enqueue failed: ${errMsg}`);
+      return;
+    }
     this.emitMetrics();
   }
 
