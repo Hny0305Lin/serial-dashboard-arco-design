@@ -642,6 +642,12 @@ export default function ForwardingWidget(props: {
               const m = id ? metricsById.get(id) : null;
               const enabled = !!cc?.enabled;
               const health = (id ? channelHealthById.get(id) : null) || 'pending';
+              const metricsSummary = [
+                `队列 ${m?.queueLength ?? 0}`,
+                `成功 ${m?.sent ?? 0}`,
+                `失败 ${m?.failed ?? 0}`,
+                typeof m?.avgLatencyMs === 'number' ? `延迟 ${Math.round(m.avgLatencyMs)}ms` : null
+              ].filter(Boolean).join('  ');
               return (
                 <Card
                   key={id || cc?.name}
@@ -672,12 +678,24 @@ export default function ForwardingWidget(props: {
                       {health === 'ok' ? 'OK' : health === 'suspect' ? '疑似问题' : health === 'recovering' ? '正在恢复' : health === 'bad' ? '异常' : '暂定'}
                     </Tag>
                   </Space>
-                  <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                    <Typography.Text type="secondary">队列 {m?.queueLength ?? 0}</Typography.Text>
-                    <Typography.Text type="secondary">成功 {m?.sent ?? 0}</Typography.Text>
-                    <Typography.Text type="secondary">失败 {m?.failed ?? 0}</Typography.Text>
-                    {typeof m?.avgLatencyMs === 'number' && <Typography.Text type="secondary">延迟 {Math.round(m.avgLatencyMs)}ms</Typography.Text>}
-                  </div>
+                  <Tooltip trigger={['hover', 'focus', 'click']} content={metricsSummary}>
+                    <div
+                      className="forwarding-channel-metrics-row no-scrollbar"
+                      tabIndex={0}
+                      role="group"
+                      aria-label={metricsSummary}
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <Typography.Text className="forwarding-channel-metrics-item" type="secondary" title={`队列 ${m?.queueLength ?? 0}`}>队列 {m?.queueLength ?? 0}</Typography.Text>
+                      <Typography.Text className="forwarding-channel-metrics-item" type="secondary" title={`成功 ${m?.sent ?? 0}`}>成功 {m?.sent ?? 0}</Typography.Text>
+                      <Typography.Text className="forwarding-channel-metrics-item" type="secondary" title={`失败 ${m?.failed ?? 0}`}>失败 {m?.failed ?? 0}</Typography.Text>
+                      {typeof m?.avgLatencyMs === 'number' && (
+                        <Typography.Text className="forwarding-channel-metrics-item" type="secondary" title={`延迟 ${Math.round(m.avgLatencyMs)}ms`}>
+                          延迟 {Math.round(m.avgLatencyMs)}ms
+                        </Typography.Text>
+                      )}
+                    </div>
+                  </Tooltip>
                   {!!m?.lastError && (
                     <Tooltip content={m.lastError}>
                       <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

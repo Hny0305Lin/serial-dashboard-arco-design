@@ -207,6 +207,37 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       .forwarding-channel-card:hover {
         transform: translateY(-2px);
       }
+      .forwarding-channel-metrics-row {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
+        max-width: 100%;
+        -webkit-overflow-scrolling: touch;
+      }
+      .forwarding-channel-metrics-row > * + * {
+        margin-left: 10px;
+      }
+      @supports (gap: 10px) {
+        .forwarding-channel-metrics-row {
+          gap: 10px;
+        }
+        .forwarding-channel-metrics-row > * + * {
+          margin-left: 0;
+        }
+      }
+      .forwarding-channel-metrics-item {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+      .forwarding-channel-metrics-row:focus-visible {
+        outline: 2px solid rgba(22, 93, 255, 0.55);
+        outline-offset: 2px;
+        border-radius: 4px;
+      }
       .forwarding-channels-strip {
         display: flex;
         gap: 10px;
