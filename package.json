@@ -10,7 +10,11 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "pnpm run build && node --test dist/test/**/*.test.js",
-    "perf:forwarding": "pnpm run build && node dist/perf/forwarding-perf.js"
+    "perf:forwarding": "pnpm run build && node dist/perf/forwarding-perf.js",
+    "perf:mixed-encoding": "pnpm run build && node dist/perf/mixed-encoding-perf.js",
+    "perf:mixed-encoding:sample": "pnpm run build && node dist/perf/mixed-encoding-analyze-sample.js",
+    "clean:serial-logs": "pnpm run build && node dist/tools/cleanSerialLogs.js",
+    "diag:com": "pnpm run build && node dist/tools/diagnoseComPort.js"
   },
   "keywords": [],
   "author": "",

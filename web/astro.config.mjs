@@ -1,7 +1,18 @@
 import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 
-// https://astro.build/config
+const backendPort = (() => {
+  const n = Number(String(process.env.BACKEND_PORT || process.env.PUBLIC_BACKEND_PORT || '').trim());
+  if (Number.isFinite(n) && n > 0) return n;
+  return 9001;
+})();
+
+const webPort = (() => {
+  const n = Number(String(process.env.WEB_PORT || '').trim());
+  if (Number.isFinite(n) && n > 0) return n;
+  return 9000;
+})();
+
 export default defineConfig({
   integrations: [react()],
   vite: {
@@ -11,13 +22,14 @@ export default defineConfig({
       }
     },
     server: {
+      strictPort: true,
       proxy: {
         '/api': {
-          target: 'http://127.0.0.1:9001',
+          target: `http://127.0.0.1:${backendPort}`,
           changeOrigin: true
         },
         '/ws': {
-          target: 'ws://127.0.0.1:9001',
+          target: `ws://127.0.0.1:${backendPort}`,
           ws: true,
           changeOrigin: true
         }
@@ -25,6 +37,6 @@ export default defineConfig({
     },
   },
   server: {
-    port: 9000,
+    port: webPort,
   }
 });

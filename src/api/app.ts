@@ -102,8 +102,8 @@ export function createApp(portManager: PortManager, forwarding?: ForwardingServi
     const next = req.body;
     if (!next || typeof next !== 'object') return res.status(400).json({ code: 400, msg: 'Invalid config' });
     try {
-      await forwarding.setConfig(next);
-      res.json({ code: 0, msg: 'success', data: forwarding.getConfig() });
+      const persisted = await forwarding.setConfig(next);
+      res.json({ code: 0, msg: 'success', data: forwarding.getConfig(), persisted });
     } catch (error: any) {
       res.status(500).json({ code: 500, msg: error.message });
     }

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { ForwardingCompression, ForwardingEncryption, ForwardingOutboundBatch, ForwardingPayloadFormat } from '../../types/forwarding';
+import { decodeMixedBytes } from '../../core/mixedEncoding';
 
 export interface BuiltPayload {
   format: ForwardingPayloadFormat;
@@ -62,21 +63,61 @@ function stripControlChars(s: string): string {
   return s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
 
-function extractGateMessage(s: string): string {
-  const keys = ['user.smsCallback'];
-  for (const k of keys) {
-    const idx1 = s.indexOf(`I/${k}`);
-    const idx2 = s.indexOf(k);
-    const idx = idx1 >= 0 ? idx1 + 2 : idx2;
-    if (idx < 0) continue;
-    let out = s.slice(idx);
-    const nul = out.indexOf('\u0000');
-    if (nul >= 0) out = out.slice(0, nul);
-    const marker = out.indexOf('~~');
-    if (marker >= 0) out = out.slice(0, marker);
-    return out;
+function stripEscapeArtifacts(s: string): string {
+  return s
+    .replace(/<bin:[^>]*>/g, ' ')
+    .replace(/\\u[0-9a-fA-F]{4}/g, ' ')
+    .replace(/\\x[0-9a-fA-F]{2}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeTextLine(s: string): string {
+  return s.replace(/\t/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractSmsCallbackMessage(s: string): string {
+  const k = 'user.smsCallback';
+  const idx1 = s.indexOf(`I/${k}`);
+  const idx2 = s.indexOf(k);
+  const idx = idx1 >= 0 ? idx1 + 2 : idx2;
+  if (idx < 0) return '';
+  let out = s.slice(idx);
+  const marker = out.indexOf('~~');
+  if (marker >= 0) out = out.slice(0, marker);
+  return normalizeTextLine(out);
+}
+
+function extractNotifyPollMessage(s: string): string {
+  const idx = s.indexOf('/user.util_notify.poll');
+  if (idx < 0) return '';
+  const t = normalizeTextLine(s.slice(idx));
+  const m = t.match(/(\/user\.util_notify\.poll)\s+mobile\.status\s+\d+\s+(.+)$/);
+  if (!m) return '';
+  const rawMsg = String(m[2] || '');
+  let msg = rawMsg;
+  if (rawMsg.includes('网络已注册,漫游')) msg = '网络已注册,漫游';
+  else if (rawMsg.includes('网络已注册')) msg = '网络已注册';
+  else if (rawMsg.includes('网络未注册')) msg = '网络未注册';
+  else {
+    msg = rawMsg.replace(/\s+Lj.*$/g, '').replace(/\s+L[0-9A-Za-z]{0,6}s.*$/g, '').replace(/\s+\+.*$/g, '').trim();
   }
-  return s;
+  return normalizeTextLine(`${m[1]} mobile.status ${msg}`);
+}
+
+function decodeRecordTextForFeishu(r: any): string {
+  const rawB64 = typeof r?.rawBytesBase64 === 'string' ? r.rawBytesBase64 : '';
+  if (rawB64) {
+    const buf = Buffer.from(rawB64, 'base64');
+    const decoded = decodeMixedBytes(buf, { controlStrategy: 'strip', invalidByteStrategy: 'replace', binaryStrategy: 'summary' });
+    return stripEscapeArtifacts(decoded.text).replace(/\u0000/g, '');
+  }
+  const payload =
+    typeof r?.payloadText === 'string' ? r.payloadText :
+      r?.payloadJson != null ? JSON.stringify(r.payloadJson) :
+        typeof r?.payloadBytesBase64 === 'string' ? r.payloadBytesBase64 :
+          '';
+  return stripEscapeArtifacts(stripControlChars(String(payload))).replace(/\u0000/g, '');
 }
 
 function formatRecordLine(r: any): string {
@@ -86,14 +127,29 @@ function formatRecordLine(r: any): string {
   const type = String(r?.dataType || '').trim();
   const prefixParts = [ts, port, dev, type].filter(Boolean);
   const prefix = prefixParts.length > 0 ? `[${prefixParts.join(' ')}] ` : '';
-  const payload =
-    typeof r?.payloadText === 'string' ? r.payloadText :
-      r?.payloadJson != null ? JSON.stringify(r.payloadJson) :
-        typeof r?.payloadBytesBase64 === 'string' ? r.payloadBytesBase64 :
-          '';
-  const extracted = extractGateMessage(String(payload));
-  const cleaned = stripControlChars(extracted);
-  return `${prefix}${cleaned}`.trim();
+  const text = decodeRecordTextForFeishu(r);
+
+  const sms = extractSmsCallbackMessage(text);
+  if (sms) return `${prefix}${sms}`.trim();
+
+  const notify = extractNotifyPollMessage(text);
+  const socsq = text.includes('+SOCSQ: %d,%d,%d') ? 'SOCSQ: %d,%d,%d' : '';
+  const csq = text.includes('+CSQ: %d') ? 'CSQ: %d' : '';
+
+  const parts = [notify, socsq, csq].filter(Boolean);
+  if (parts.length > 0) return `${prefix}${parts.join(' ')}`.trim();
+
+  return `${prefix}${normalizeTextLine(text)}`.trim();
+}
+
+function hexHead(buf: Buffer, maxBytes: number): string {
+  const b = buf.subarray(0, Math.min(maxBytes, buf.length));
+  const hex = b.toString('hex').toUpperCase();
+  return buf.length > b.length ? `${hex}…(${buf.length}B)` : `${hex}(${buf.length}B)`;
+}
+
+function traceEnabled(): boolean {
+  return String(process.env.FORWARDING_TRACE || '').trim() === '1';
 }
 
 export function buildOutboundPayload(batch: ForwardingOutboundBatch, opts: { xmlTemplate?: string }): BuiltPayload {
@@ -126,6 +182,22 @@ export function buildOutboundPayload(batch: ForwardingOutboundBatch, opts: { xml
     body = buildBinary(batch);
     headers['content-type'] = 'application/octet-stream';
   } else if (format === 'feishu') {
+    if (traceEnabled()) {
+      const sample = batch.records.slice(0, 2);
+      for (const r of sample) {
+        const b64 = typeof (r as any)?.rawBytesBase64 === 'string' ? (r as any).rawBytesBase64 : '';
+        if (b64) {
+          const buf = Buffer.from(b64, 'base64');
+          const decoded = decodeMixedBytes(buf, { controlStrategy: 'space', invalidByteStrategy: 'replace', binaryStrategy: 'summary' });
+          const cleaned = stripEscapeArtifacts(decoded.text);
+          console.log(`[Forwarding] feishu trace raw=${hexHead(buf, 64)}`);
+          console.log(`[Forwarding] feishu trace decoded=${cleaned.slice(0, 160)}`);
+        } else {
+          const cleaned = stripEscapeArtifacts(String((r as any)?.payloadText || ''));
+          console.log(`[Forwarding] feishu trace decoded=${cleaned.slice(0, 160)}`);
+        }
+      }
+    }
     const lines = batch.records.map(r => formatRecordLine(r)).filter(Boolean);
     let text = lines.join('\n');
     if (!text) text = `(empty batch) id=${batch.id}`;
@@ -148,6 +220,9 @@ export function buildOutboundPayload(batch: ForwardingOutboundBatch, opts: { xml
       text = `${text.slice(0, Math.floor(text.length * 0.85))}…(truncated)`;
     }
     headers['content-type'] = 'application/json; charset=utf-8';
+    if (traceEnabled()) {
+      console.log(`[Forwarding] feishu trace body=${hexHead(body, 64)}`);
+    }
   } else if (format === 'xml') {
     const template = opts.xmlTemplate || '<batch id="{{batchId}}" createdAt="{{createdAt}}" channelId="{{channelId}}" count="{{count}}">{{recordsJson}}</batch>';
     const xml = buildXmlFromTemplate(template, {

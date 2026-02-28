@@ -1,5 +1,7 @@
 import crypto from 'crypto';
+import { TextDecoder } from 'util';
 import { ForwardingFrameRule, ForwardingParseRule, ForwardingRecord } from '../../types/forwarding';
+import { decodeMixedBytes } from '../../core/mixedEncoding';
 
 export function sha256Hex(data: Buffer): string {
   return crypto.createHash('sha256').update(data).digest('hex');
@@ -164,9 +166,11 @@ export function parseFrameToRecord(frame: Buffer, opts: { portPath: string; ts?:
     return { id, ts, portPath: opts.portPath, payloadBytesBase64: rawBytesBase64, rawBytesBase64, hash };
   }
 
-  const text = frame.toString('utf8');
   if (mode === 'json') {
+    let text = '';
     try {
+      const dec = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+      text = dec.decode(frame);
       const obj = JSON.parse(text);
       const deviceId = getByPath(obj, opts.parse.jsonDeviceIdPath);
       const dataType = getByPath(obj, opts.parse.jsonTypePath);
@@ -186,9 +190,11 @@ export function parseFrameToRecord(frame: Buffer, opts: { portPath: string; ts?:
     }
   }
 
+  const decoded = decodeMixedBytes(frame);
+  const text = decoded.searchText;
   const pattern = opts.parse.regex;
   if (!pattern) {
-    return { id, ts, portPath: opts.portPath, payloadText: text, rawBytesBase64, hash };
+    return { id, ts, portPath: opts.portPath, payloadText: decoded.text, rawBytesBase64, hash };
   }
   try {
     const re = new RegExp(pattern, opts.parse.regexFlags || '');
@@ -197,7 +203,7 @@ export function parseFrameToRecord(frame: Buffer, opts: { portPath: string; ts?:
     const groups = (m as any).groups || {};
     const deviceId = groups.deviceId ?? groups.device ?? groups.id;
     const dataType = groups.type ?? groups.dataType;
-    const payloadText = groups.payload ?? groups.value ?? text;
+    const payloadText = groups.payload ?? groups.value ?? decoded.text;
     return {
       id,
       ts,

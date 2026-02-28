@@ -106,6 +106,11 @@ export interface ForwardingConfigV1 {
   enabled: boolean;
   sources: ForwardingSourceRule[];
   channels: ForwardingChannelConfig[];
+  integrity?: {
+    schemaVersion: 1;
+    savedAt: number;
+    hash: string;
+  };
   store?: {
     maxMemoryRecords?: number;
     dataDir?: string;

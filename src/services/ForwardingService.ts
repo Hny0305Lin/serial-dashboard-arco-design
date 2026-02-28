@@ -2,8 +2,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { URL } from 'url';
 import { PortManager } from '../core/PortManager';
+import { decodeMixedBytes } from '../core/mixedEncoding';
 import { FileQueue, FileQueueItem } from '../storage/FileQueue';
-import { JsonFileStore } from '../storage/JsonFileStore';
+import { ForwardingConfigStore } from '../storage/ForwardingConfigStore';
 import {
   ForwardingAlertConfig,
   ForwardingChannelConfig,
@@ -32,7 +33,7 @@ type ForwardingLogEntry = {
 
 export class ForwardingService {
   private portManager: PortManager;
-  private store: JsonFileStore<ForwardingConfigV1>;
+  private store: ForwardingConfigStore<ForwardingConfigV1>;
   private config: ForwardingConfigV1;
   private recordStore: RecordStore;
   private baseDataDir: string;
@@ -59,7 +60,7 @@ export class ForwardingService {
 
   constructor(opts: { portManager: PortManager; configPath: string; dataDir: string }) {
     this.portManager = opts.portManager;
-    this.store = new JsonFileStore<ForwardingConfigV1>(opts.configPath);
+    this.store = new ForwardingConfigStore<ForwardingConfigV1>(opts.configPath);
     this.baseDataDir = String(opts.dataDir || '').trim();
     this.config = this.defaultConfig(opts.dataDir);
     this.recordStore = new RecordStore({
@@ -81,9 +82,92 @@ export class ForwardingService {
   }
 
   public async init(): Promise<void> {
-    const loaded = await this.store.read(this.config);
-    this.applyConfig(loaded);
+    const loaded = await this.store.readWithRecovery({
+      defaultValue: this.config,
+      validate: (v: any) => this.validateLoadedConfig(v),
+      restoreOnDefault: true
+    });
+    if (loaded.restored) {
+      const msg = `forwarding config restored (${loaded.source}) reason=${loaded.reason || 'unknown'} path=${this.store.getFilePath()}`;
+      this.log(loaded.source === 'default' ? 'error' : 'warn', msg);
+    } else {
+      this.log('info', `forwarding config loaded path=${this.store.getFilePath()}`);
+    }
+    this.applyConfig(loaded.value);
+    await this.ensureIntegrityPersistedOnStartup(loaded.value).catch(() => undefined);
     this.bindPortManager();
+  }
+
+  private validateLoadedConfig(v: any): { ok: true } | { ok: false; reason: string } {
+    if (!v || typeof v !== 'object') return { ok: false, reason: 'config is not an object' };
+    if ((v as any).version !== 1) return { ok: false, reason: `unsupported version=${String((v as any).version)}` };
+    if (!Array.isArray((v as any).sources)) return { ok: false, reason: 'sources is not an array' };
+    if (!Array.isArray((v as any).channels)) return { ok: false, reason: 'channels is not an array' };
+
+    const integrity = (v as any).integrity;
+    if (integrity && typeof integrity === 'object') {
+      const schemaVersion = Number((integrity as any).schemaVersion);
+      const savedAt = Number((integrity as any).savedAt);
+      const hash = String((integrity as any).hash || '').trim();
+      if (schemaVersion !== 1 || !Number.isFinite(savedAt) || !hash) return { ok: false, reason: 'invalid integrity metadata' };
+      const expected = this.computeConfigHash(this.stripIntegrity(v as ForwardingConfigV1));
+      if (hash !== expected) return { ok: false, reason: 'integrity hash mismatch' };
+    }
+    return { ok: true };
+  }
+
+  private stripIntegrity(cfg: ForwardingConfigV1): any {
+    const out: any = { ...(cfg as any) };
+    delete out.integrity;
+    return out;
+  }
+
+  private stableStringify(value: any): string {
+    const seen = new WeakSet<object>();
+    const enc = (v: any): any => {
+      if (v === null) return null;
+      const t = typeof v;
+      if (t === 'undefined' || t === 'function' || t === 'symbol') return undefined;
+      if (t === 'string' || t === 'number' || t === 'boolean') return v;
+      if (t === 'bigint') return v.toString();
+      if (t !== 'object') return null;
+      if (Buffer.isBuffer(v)) return v.toString('base64');
+      if (Array.isArray(v)) return v.map(x => {
+        const y = enc(x);
+        return y === undefined ? null : y;
+      });
+      if (seen.has(v)) return null;
+      seen.add(v);
+      const keys = Object.keys(v).sort();
+      const out: any = {};
+      for (const k of keys) {
+        const next = enc(v[k]);
+        if (next === undefined) continue;
+        out[k] = next;
+      }
+      return out;
+    };
+    return JSON.stringify(enc(value));
+  }
+
+  private computeConfigHash(value: any): string {
+    const s = this.stableStringify(value);
+    return sha256Hex(Buffer.from(s, 'utf8'));
+  }
+
+  private buildIntegrity(cfg: ForwardingConfigV1): NonNullable<ForwardingConfigV1['integrity']> {
+    const savedAt = Date.now();
+    const hash = this.computeConfigHash(this.stripIntegrity(cfg));
+    return { schemaVersion: 1, savedAt, hash };
+  }
+
+  private async ensureIntegrityPersistedOnStartup(rawLoaded: ForwardingConfigV1): Promise<void> {
+    const hasIntegrity = !!(rawLoaded as any)?.integrity;
+    if (hasIntegrity) return;
+    const upgraded: ForwardingConfigV1 = { ...this.config, integrity: this.buildIntegrity(this.config) };
+    await this.store.writeAtomic(upgraded, { forceBackup: true });
+    this.config = upgraded;
+    this.log('warn', `forwarding config upgraded with integrity metadata path=${this.store.getFilePath()}`);
   }
 
   private senderKeyForChannel(ch: ForwardingChannelConfig): string {
@@ -297,10 +381,14 @@ export class ForwardingService {
     return this.config.channels.some(c => !!c.enabled && String((c as any)?.ownerWidgetId || '').trim() === owner);
   }
 
-  public async setConfig(next: ForwardingConfigV1): Promise<void> {
+  public async setConfig(next: ForwardingConfigV1): Promise<{ savedAt: number; hash: string; bytes: number }> {
     this.validateConfig(next);
     this.applyConfig(next);
-    await this.store.write(this.config);
+    const integrity = this.buildIntegrity(this.config);
+    const toSave: ForwardingConfigV1 = { ...this.config, integrity };
+    const w = await this.store.writeAtomic(toSave, { forceBackup: true });
+    this.config = toSave;
+    return { savedAt: integrity.savedAt, hash: integrity.hash, bytes: w.bytes };
   }
 
   public async setEnabled(enabled: boolean): Promise<void> {
@@ -487,6 +575,7 @@ export class ForwardingService {
       enabled: !!raw.enabled,
       sources,
       channels: normalizedChannels,
+      integrity: raw.integrity && typeof raw.integrity === 'object' ? { ...raw.integrity } : undefined,
       store: {
         maxMemoryRecords: raw.store?.maxMemoryRecords || 2000,
         dataDir,
@@ -788,8 +877,9 @@ export class ForwardingService {
     for (const frame of frames) {
       const gateText = String((src as any).startOnText || '').trim();
       const gateMode = String((src as any).startMode || '').trim() || 'after';
-      const frameText = frame.toString('utf8');
-      const gateHit = !!gateText && frameText.includes(gateText);
+      const decoded = decodeMixedBytes(frame);
+      const frameText = decoded.text;
+      const gateHit = !!gateText && decoded.searchText.includes(gateText);
       if (gateText) {
         if (gateMode === 'only') {
           if (!gateHit) continue;
