@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "npm",
+			"script": "dev:all",
+			"problemMatcher": [],
+			"label": "pnpm: dev:all",
+			"detail": "node scripts/dev-all.js"
+		}
+	]
+}
