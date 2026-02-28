@@ -1,20 +1,18 @@
-<p align="center">
-  <a href="https://github.com/arco-design" target="_blank" rel="noopener noreferrer">
-    <img alt="Arco Design" width="220" src="web/public/brand/arco-design.png" />
-  </a>
-</p>
-
 # serial-dashboard-arco-design
+
+![Arco Design](web/public/brand/arco-design.png)
+
+版本：`1.0.0`
+
+## 简介
+
+A web-based serial port commander and dashboard with real-time monitoring and control.
 
 一个 Web 串口控制台管理系统 + 实时监控面板（前端 Astro + React + Arco，后端 Node.js + Express + WebSocket + serialport）。
 
----
-
-本项目基于 [字节跳动Arco设计库](https://github.com/arco-design/arco-design) 实现前端。
-
-本项目基于 [Node.js](https://nodejs.org/en) 实现后端。
-
-本项目使用Trae IDE进行开发，使用GPT-5.2 和 Gemini-3-Pro-Preview大模型，推荐使用大模型辅助，减少手动编写代码的工作量和开发时间。
+- 前端：基于 [Arco Design](https://arco.design/)（Astro + React）
+- 后端：基于 [Node.js](https://nodejs.org/en)（Express + ws + serialport）
+- 开发方式：使用 Trae IDE + 大模型辅助（可选）
 
 ## 目录
 
@@ -134,19 +132,21 @@ $ curl -s -X POST http://localhost:9001/api/ports/write \
 
 ## 开发命令
 
-| 命令 | 用途 | 说明 |
+运行方式：`pnpm run <script>`
+
+| Script | 用途 | 说明 |
 | --- | --- | --- |
-| `pnpm run dev` | 后端开发（热重载） | `nodemon` 监听变更，`ts-node` 直接跑 `src/index.ts` |
-| `pnpm run dev:web` | 前端开发 | 在 `web/` 启动 `astro dev` |
-| `pnpm run dev:all` | 前后端一起启动 | 编排启动后端 + 前端；任一退出则整体退出 |
-| `pnpm run build` | 编译后端 | `tsc` 输出到 `dist/` |
-| `pnpm run start` | 运行后端产物 | `node dist/index.js`（更接近生产） |
-| `pnpm run test` | 跑测试 | 先 build，再用 `node --test` 跑 `dist/test` |
-| `pnpm run perf:forwarding` | 转发链路压测 | 先 build，再跑 `dist/perf/forwarding-perf.js` |
-| `pnpm run perf:mixed-encoding` | 混合编码压测 | 先 build，再跑 `dist/perf/mixed-encoding-perf.js` |
-| `pnpm run perf:mixed-encoding:sample` | 混合编码样本分析 | 先 build，再跑 `dist/perf/mixed-encoding-analyze-sample.js` |
-| `pnpm run clean:serial-logs` | 清理串口日志落盘 | 先 build，再跑 `dist/tools/cleanSerialLogs.js` |
-| `pnpm run diag:com` | 诊断 COM 串口可用性 | 先 build，再跑 `dist/tools/diagnoseComPort.js` |
+| `dev` | 后端开发（热重载） | `nodemon` 监听变更，`ts-node` 直接跑 `src/index.ts` |
+| `dev:web` | 前端开发 | 在 `web/` 启动 `astro dev` |
+| `dev:all` | 前后端一起启动 | 编排启动后端 + 前端；任一退出则整体退出 |
+| `build` | 编译后端 | `tsc` 输出到 `dist/` |
+| `start` | 运行后端产物 | `node dist/index.js`（更接近生产） |
+| `test` | 跑测试 | 先 build，再用 `node --test` 跑 `dist/test` |
+| `perf:forwarding` | 转发链路压测 | 性能阈值不达标时可能返回非 0；用于压测/对比 |
+| `perf:mixed-encoding` | 混合编码压测 | 用于评估 `decodeMixedBytes` 性能 |
+| `perf:mixed-encoding:sample` | 混合编码样本分析 | 用于分析样本字节构成与分段结果 |
+| `clean:serial-logs` | 清理串口日志落盘 | CLI 工具；可带参数生成清洗后的文本 |
+| `diag:com` | 诊断 COM 串口可用性 | CLI 工具；用于快速定位端口识别/占用/WS 推送等问题 |
 
 ## 配置
 
@@ -545,13 +545,13 @@ Endpoint（开发默认）：`ws://localhost:9001/ws`
 
 串口数据推送，存在两种形态：
 
-1) 如果端口数据经过 packet 解析，`data` 直接为 packet
+1. 如果端口数据经过 packet 解析，`data` 直接为 packet
 
 ```json
 { "type": "serial:data", "path": "COM5", "data": { "any": "packet" } }
 ```
 
-2) 原始 buffer 形态会被包裹在 `data.raw` 中（Buffer JSON 结构）
+1. 原始 buffer 形态会被包裹在 `data.raw` 中（Buffer JSON 结构）
 
 ```json
 {
@@ -644,10 +644,22 @@ $ pnpm run test
 
 ## 文档自检
 
-在完成依赖安装后，执行以下命令进行文档与示例自检：
+在完成依赖安装后，执行以下命令进行文档与示例自检（默认检查 README.md）：
 
 ```bash
 $ node scripts/check-docs.mjs
+```
+
+如需检查全量 Markdown（包含 `docs/**/*.md`），可执行：
+
+```bash
+$ node scripts/check-docs.mjs --all
+```
+
+如遇到网络受限导致外部链接检查失败，可临时跳过外链检查：
+
+```bash
+$ node scripts/check-docs.mjs --skip-external
 ```
 
 ## 排障
@@ -732,6 +744,4 @@ $ node scripts/check-docs.mjs
 
 ## 许可证（License）
 
-[Haohanyh Computer Software Products Open Source LICENSE](https://github.com/Hny0305Lin/LICENSE/blob/main/LICENSE)
-
-本仓库同时提供 [LICENSE](LICENSE) 文件作为完整许可文本。
+本项目使用 `LicenseRef-Haohanyh-Computer-Software-Products-Open-Source-LICENSE`（见 [LICENSE](LICENSE)）。

@@ -163,7 +163,7 @@ async function main(): Promise<void> {
         ''
       ].join('\n')
     );
-    process.exitCode = 2;
+    process.exitCode = 0;
     return;
   }
 

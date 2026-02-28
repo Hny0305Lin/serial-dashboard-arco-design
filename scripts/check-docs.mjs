@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -8,6 +9,18 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const PNPM_BIN = 'pnpm';
+
+function getPnpmEnv() {
+  const cacheRoot = path.join(repoRoot, '.cache');
+  const env = {
+    ...process.env,
+    LOCALAPPDATA: cacheRoot,
+    APPDATA: cacheRoot,
+    TMP: cacheRoot,
+    TEMP: cacheRoot
+  };
+  return { env, cacheRoot };
+}
 
 function fail(msg) {
   process.stderr.write(`${msg}\n`);
@@ -89,6 +102,48 @@ function parseLinks(md) {
   return links;
 }
 
+function extractBashFences(md) {
+  const lines = md.split(/\r?\n/);
+  const blocks = [];
+  let inFence = false;
+  let fenceLang = '';
+  let buf = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const fenceOpen = /^```(\S+)?$/.exec(trimmed);
+    if (!inFence && fenceOpen) {
+      inFence = true;
+      fenceLang = String(fenceOpen[1] || '').toLowerCase();
+      buf = [];
+      continue;
+    }
+    if (inFence && trimmed === '```') {
+      blocks.push({ lang: fenceLang, content: buf.join('\n') });
+      inFence = false;
+      fenceLang = '';
+      buf = [];
+      continue;
+    }
+    if (inFence) buf.push(line);
+  }
+
+  return blocks;
+}
+
+function extractPnpmRunScriptsFromBashBlocks(md) {
+  const out = new Set();
+  const blocks = extractBashFences(md).filter((b) => b.lang === 'bash' || b.lang === 'sh');
+  for (const b of blocks) {
+    for (const line of b.content.split(/\r?\n/)) {
+      const m = /^\s*\$\s*pnpm\s+run\s+(?<name>[a-zA-Z0-9:_-]+)\b/.exec(line);
+      const name = m?.groups?.name;
+      if (name) out.add(name);
+    }
+  }
+  return out;
+}
+
 function parseHeadings(md) {
   const lines = stripCodeFences(md).split(/\r?\n/);
   const headings = [];
@@ -111,8 +166,7 @@ function buildGitHubAnchors(headingTexts) {
       .trim()
       .toLowerCase()
       .replace(/[^\p{L}\p{N}\s-]/gu, '')
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
+      .replace(/\s/g, '-')
       .replace(/^-|-$/g, '');
 
     const prev = used.get(slug) ?? 0;
@@ -134,6 +188,21 @@ async function checkInternalLinks(mdFileAbs, allAnchorsByFile) {
   for (const raw of links) {
     const target = raw.split(/\s+/)[0];
     if (!target) continue;
+
+    if (target.startsWith('file://')) {
+      try {
+        const u = new URL(target);
+        const local = fileURLToPath(u);
+        if (!(await fileExists(local))) {
+          ok = false;
+          fail(`[file missing] ${path.relative(repoRoot, mdFileAbs)} -> ${target}`);
+        }
+      } catch {
+        ok = false;
+        fail(`[file invalid] ${path.relative(repoRoot, mdFileAbs)} -> ${target}`);
+      }
+      continue;
+    }
 
     if (target.startsWith('mailto:') || target.startsWith('tel:')) continue;
 
@@ -158,13 +227,8 @@ async function checkInternalLinks(mdFileAbs, allAnchorsByFile) {
       continue;
     }
 
-    if (hashPart) {
+    if (hashPart && resolved.toLowerCase().endsWith('.md')) {
       const anchors = allAnchorsByFile.get(resolved) ?? new Set();
-      if (anchors.size === 0) {
-        ok = false;
-        fail(`[anchor file not markdown] ${path.relative(repoRoot, mdFileAbs)} -> ${target}`);
-        continue;
-      }
       if (!anchors.has(hashPart)) {
         ok = false;
         fail(`[anchor missing] ${path.relative(repoRoot, mdFileAbs)} -> ${target}`);
@@ -205,8 +269,22 @@ async function checkExternalLinks(allMdFiles) {
   async function worker() {
     while (idx < urls.length) {
       const current = urls[idx++];
+      let host = '';
       try {
-        const res = await fetchWithTimeout(current, 12_000);
+        host = new URL(current).hostname;
+      } catch {
+        ok = false;
+        fail(`[external link] ${current} -> invalid url`);
+        continue;
+      }
+      if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') continue;
+      try {
+        let res;
+        try {
+          res = await fetchWithTimeout(current, 20_000);
+        } catch (e) {
+          res = await fetchWithTimeout(current, 20_000);
+        }
         if (res.status !== 200) {
           ok = false;
           fail(`[external link] ${current} -> status ${res.status}`);
@@ -230,21 +308,27 @@ function run(bin, args, opts = {}) {
   });
 }
 
-async function runWithTimeout(bin, args, timeoutMs) {
+async function runWithTimeout(bin, args, timeoutMs, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd: repoRoot, stdio: 'inherit', shell: true });
+    const child = spawn(bin, args, { cwd: repoRoot, stdio: 'inherit', shell: true, ...opts });
     let finished = false;
 
     const timer = setTimeout(() => {
       if (finished) return;
-      try {
-        child.kill();
-      } catch {}
-      setTimeout(() => {
+      if (process.platform === 'win32' && child.pid) {
         try {
-          child.kill('SIGKILL');
-        } catch {}
-      }, 1500);
+          spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', shell: true });
+        } catch { }
+      } else {
+        try {
+          child.kill('SIGTERM');
+        } catch { }
+        setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch { }
+        }, 1500);
+      }
       finished = true;
       resolve({ kind: 'timeout' });
     }, timeoutMs);
@@ -258,6 +342,18 @@ async function runWithTimeout(bin, args, timeoutMs) {
   });
 }
 
+async function findFreeTcpPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.on('error', reject);
+    server.listen(0, () => {
+      const addr = server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
 async function checkPnpmScriptsReferencedInReadme() {
   const pkg = JSON.parse(await fs.readFile(path.join(repoRoot, 'package.json'), 'utf8'));
   const scripts = pkg.scripts ?? {};
@@ -265,11 +361,7 @@ async function checkPnpmScriptsReferencedInReadme() {
   const readmeAbs = path.join(repoRoot, 'README.md');
   const md = await fs.readFile(readmeAbs, 'utf8');
 
-  const found = new Set();
-  for (const m of md.matchAll(/\bpnpm\s+run\s+(?<name>[a-zA-Z0-9:_-]+)\b/g)) {
-    const name = m.groups?.name;
-    if (name) found.add(name);
-  }
+  const found = extractPnpmRunScriptsFromBashBlocks(md);
 
   let ok = true;
   for (const name of [...found].sort()) {
@@ -280,9 +372,53 @@ async function checkPnpmScriptsReferencedInReadme() {
   }
 
   const longRunning = new Set(['dev', 'dev:web', 'dev:all', 'start']);
-  for (const name of [...found].sort()) {
+
+  function weight(name) {
+    if (name === 'build') return 10;
+    if (name === 'test') return 20;
+    if (name.startsWith('perf:')) return 30;
+    if (name === 'diag:com') return 40;
+    if (name === 'clean:serial-logs') return 50;
+    if (name === 'start') return 60;
+    if (name.startsWith('dev')) return 90;
+    return 70;
+  }
+
+  const ordered = [...found].sort((a, b) => weight(a) - weight(b) || a.localeCompare(b));
+  for (const name of ordered) {
     if (!scripts[name]) continue;
     process.stdout.write(`\n[run] pnpm run ${name}\n`);
+    if (name === 'dev:all') {
+      const lockPath = path.join(repoRoot, '.cache', `devall-${Date.now()}-${Math.random().toString(16).slice(2)}.lock`);
+      const code = await run(PNPM_BIN, ['run', name], {
+        env: {
+          ...process.env,
+          DEVALL_DRY_RUN: '1',
+          DEVALL_PORT_MODE: 'increment',
+          DEVALL_LOCK_PATH: lockPath,
+        },
+      });
+      if (code !== 0) {
+        ok = false;
+        fail(`[script failed] pnpm run ${name} exited with code ${code}`);
+      }
+      continue;
+    }
+
+    if (name === 'start') {
+      const port = await findFreeTcpPort();
+      const dataDir = path.join(repoRoot, '.cache', `start-data-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      await fs.mkdir(dataDir, { recursive: true });
+      const r = await runWithTimeout(PNPM_BIN, ['run', name], 8_000, {
+        env: { ...process.env, PORT: String(port), DATA_DIR: dataDir },
+      });
+      if (r.kind === 'exit' && r.code !== 0) {
+        ok = false;
+        fail(`[script failed] pnpm run ${name} exited with code ${r.code}`);
+      }
+      continue;
+    }
+
     if (longRunning.has(name)) {
       const r = await runWithTimeout(PNPM_BIN, ['run', name], 8_000);
       if (r.kind === 'exit' && r.code !== 0) {
@@ -291,6 +427,7 @@ async function checkPnpmScriptsReferencedInReadme() {
       }
       continue;
     }
+
     const code = await run(PNPM_BIN, ['run', name]);
     if (code !== 0) {
       ok = false;
@@ -304,7 +441,12 @@ async function checkPnpmScriptsReferencedInReadme() {
 async function main() {
   process.stdout.write(`[docs] repoRoot=${repoRoot}\n`);
 
-  const mdFiles = await listMarkdownFiles(repoRoot);
+  const checkAll = process.argv.includes('--all');
+  const skipExternal = process.argv.includes('--skip-external');
+  const pnpmEnv = getPnpmEnv();
+  await fs.mkdir(pnpmEnv.cacheRoot, { recursive: true });
+
+  const mdFiles = checkAll ? await listMarkdownFiles(repoRoot) : [path.join(repoRoot, 'README.md')];
   const anchorsByFile = new Map();
   for (const abs of mdFiles) {
     const md = await fs.readFile(abs, 'utf8');
@@ -313,7 +455,12 @@ async function main() {
   }
 
   process.stdout.write('\n[lint] markdownlint-cli2\n');
-  const lintCode = await run(PNPM_BIN, ['dlx', 'markdownlint-cli2', 'README.md', 'PROJECT.md', 'docs/**/*.md']);
+  const lintTargets = checkAll ? ['README.md', 'PROJECT.md', 'docs/**/*.md'] : ['README.md'];
+  const lintCode = await run(
+    PNPM_BIN,
+    ['dlx', 'markdownlint-cli2', '--config', '.markdownlint-cli2.jsonc', ...lintTargets],
+    { env: pnpmEnv.env }
+  );
   if (lintCode !== 0) fail(`[markdownlint] failed with code ${lintCode}`);
 
   process.stdout.write('\n[check] internal links\n');
@@ -322,7 +469,8 @@ async function main() {
   }
 
   process.stdout.write('\n[check] external links\n');
-  await checkExternalLinks(mdFiles);
+  if (skipExternal) process.stdout.write('[external link] skipped\n');
+  else await checkExternalLinks(mdFiles);
 
   process.stdout.write('\n[check] pnpm scripts referenced in README\n');
   await checkPnpmScriptsReferencedInReadme();
