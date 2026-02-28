@@ -9,7 +9,7 @@
 
 配套任务分解（用于交给后续 AI 按步骤执行）见：
 
-- [auth-totp-public-link.tasks.md](auth-totp-public-link.tasks.md)
+- [tasks/auth-totp-public-link.tasks.md](tasks/auth-totp-public-link.tasks.md)
 
 ---
 
@@ -237,4 +237,3 @@ UI 建议：
 
 - status/redeem/login 都应有明确超时与错误码
 - 推荐提供一个最小 `GET /api/auth/health` 或把 auth 指标融入现有 metrics（可选）
-

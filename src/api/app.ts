@@ -2,12 +2,35 @@ import express from 'express';
 import cors from 'cors';
 import { PortManager } from '../core/PortManager';
 import { ForwardingService } from '../services/ForwardingService';
+import type { AppSettingsStore } from '../storage/AppSettingsStore';
 
-export function createApp(portManager: PortManager, forwarding?: ForwardingService) {
+export function createApp(portManager: PortManager, forwarding?: ForwardingService, appSettingsStore?: AppSettingsStore) {
   const app = express();
 
   app.use(cors());
   app.use(express.json());
+
+  app.get('/settings', async (_req, res) => {
+    if (!appSettingsStore) return res.status(404).json({ code: 404, msg: 'Settings store not enabled' });
+    try {
+      const data = await appSettingsStore.read();
+      res.json({ code: 0, msg: 'success', data });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
+
+  app.put('/settings', async (req, res) => {
+    if (!appSettingsStore) return res.status(404).json({ code: 404, msg: 'Settings store not enabled' });
+    const data = req.body?.data;
+    if (!data || typeof data !== 'object') return res.status(400).json({ code: 400, msg: 'Invalid settings' });
+    try {
+      const persisted = await appSettingsStore.write(data);
+      res.json({ code: 0, msg: 'success', data: persisted });
+    } catch (error: any) {
+      res.status(500).json({ code: 500, msg: error.message });
+    }
+  });
 
   // 1. 获取所有串口列表
   app.get('/ports', async (req, res) => {

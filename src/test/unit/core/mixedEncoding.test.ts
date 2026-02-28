@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeMixedBytes } from '../../core/mixedEncoding';
+import { decodeMixedBytes } from '../../../core/mixedEncoding';
 
 test('decodeMixedBytes: 标准 AT 响应保持原样', () => {
   const buf = Buffer.from('+SOCSQ: 1,2,3\r\nOK\r\n', 'utf8');

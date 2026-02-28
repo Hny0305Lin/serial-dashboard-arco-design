@@ -1,0 +1,36 @@
+.wsc-settings-card {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.wsc-settings-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wsc-settings-help {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.wsc-settings-collapse {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: max-height 220ms ease, opacity 180ms ease, transform 180ms ease;
+}
+
+.wsc-settings-collapse[data-open='true'] {
+  max-height: 420px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wsc-settings-collapse {
+    transition: none;
+  }
+}

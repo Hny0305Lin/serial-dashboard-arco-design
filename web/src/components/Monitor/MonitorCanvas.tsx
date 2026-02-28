@@ -1083,7 +1083,8 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   useEffect(() => {
     if (!canUseDom) return;
-    if (!(import.meta as any)?.env?.DEV) return;
+    const isWebDriver = !!(globalThis as any)?.navigator?.webdriver;
+    if (!isWebDriver && !(import.meta as any)?.env?.DEV) return;
     (window as any).__monitorTest = {
       setWidgetLastRxAt: (id: string, ts?: number) => {
         const next = typeof ts === 'number' ? ts : Date.now();

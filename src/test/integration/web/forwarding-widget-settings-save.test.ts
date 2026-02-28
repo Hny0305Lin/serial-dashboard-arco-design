@@ -5,6 +5,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
+function findRepoRoot(fromDir: string) {
+  let dir = fromDir;
+  for (let i = 0; i < 10; i++) {
+    const pkg = path.join(dir, 'package.json');
+    const scriptsDir = path.join(dir, 'scripts');
+    const webPkg = path.join(dir, 'web', 'package.json');
+    if (fs.existsSync(pkg) && fs.existsSync(scriptsDir) && fs.existsSync(webPkg)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(`repo root not found from ${fromDir}`);
+}
+
 function loadCjsExportsFromTsFile(filePath: string): any {
   const src = fs.readFileSync(filePath, 'utf8');
   const out = ts.transpileModule(src, {
@@ -36,7 +50,7 @@ function normalizePath(p?: string) {
 }
 
 test('ForwardingWidget 保存：未打开「渠道」Tab 时不应清空 channels', () => {
-  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const repoRoot = findRepoRoot(__dirname);
   const filePath = path.join(repoRoot, 'web', 'src', 'components', 'Monitor', 'forwardingConfigDraft.ts');
   const { buildForwardingNextConfigForWidget } = loadCjsExportsFromTsFile(filePath);
 
@@ -63,7 +77,7 @@ test('ForwardingWidget 保存：未打开「渠道」Tab 时不应清空 channel
 });
 
 test('ForwardingWidget 保存：未打开「数据源」Tab 时不应丢失 sources（含串口端口）', () => {
-  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const repoRoot = findRepoRoot(__dirname);
   const filePath = path.join(repoRoot, 'web', 'src', 'components', 'Monitor', 'forwardingConfigDraft.ts');
   const { buildForwardingNextConfigForWidget } = loadCjsExportsFromTsFile(filePath);
 
@@ -90,7 +104,7 @@ test('ForwardingWidget 保存：未打开「数据源」Tab 时不应丢失 sour
 });
 
 test('ForwardingWidget 保存：显式提交空 channels 表示清空 owned channels（不会影响 others）', () => {
-  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const repoRoot = findRepoRoot(__dirname);
   const filePath = path.join(repoRoot, 'web', 'src', 'components', 'Monitor', 'forwardingConfigDraft.ts');
   const { buildForwardingNextConfigForWidget } = loadCjsExportsFromTsFile(filePath);
 

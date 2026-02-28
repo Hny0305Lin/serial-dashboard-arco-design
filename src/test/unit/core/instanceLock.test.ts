@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { acquireInstanceLock } from '../../core/instanceLock';
+import { acquireInstanceLock } from '../../../core/instanceLock';
 
 function tmpFilePath(prefix: string) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;

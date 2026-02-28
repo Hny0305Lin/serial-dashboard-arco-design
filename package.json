@@ -7,6 +7,7 @@
     "dev": "nodemon --exec ts-node src/index.ts",
     "dev:web": "pnpm -C web dev",
     "dev:all": "node scripts/dev-all.js",
+    "check:ports": "node scripts/check-ports.js",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "pnpm run build && node --test dist/test/**/*.test.js",

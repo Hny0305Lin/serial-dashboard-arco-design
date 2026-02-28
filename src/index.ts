@@ -8,6 +8,7 @@ import path from 'path';
 import { ForwardingService } from './services/ForwardingService';
 import { acquireInstanceLock } from './core/instanceLock';
 import { ESerialBusy } from './core/errors';
+import { AppSettingsStore } from './storage/AppSettingsStore';
 
 const PORT = (() => {
   const n = Number(String(process.env.PORT || '').trim());
@@ -39,9 +40,10 @@ async function main() {
     dataDir
   });
   await forwarding.init();
+  const appSettingsStore = new AppSettingsStore(path.join(dataDir, 'web.settings.json'));
 
   // 初始化 Express 应用
-  const app = createApp(portManager, forwarding);
+  const app = createApp(portManager, forwarding, appSettingsStore);
 
   // 使用 /api 前缀挂载路由
   // createApp 返回的是 express() 实例，可以直接作为子应用挂载

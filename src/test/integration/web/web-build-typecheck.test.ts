@@ -4,8 +4,22 @@ import ts from 'typescript';
 import fs from 'node:fs';
 import path from 'node:path';
 
+function findRepoRoot(fromDir: string) {
+  let dir = fromDir;
+  for (let i = 0; i < 10; i++) {
+    const pkg = path.join(dir, 'package.json');
+    const scriptsDir = path.join(dir, 'scripts');
+    const webPkg = path.join(dir, 'web', 'package.json');
+    if (fs.existsSync(pkg) && fs.existsSync(scriptsDir) && fs.existsSync(webPkg)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(`repo root not found from ${fromDir}`);
+}
+
 test('ForwardingWidget has no implicit any parameters (type safety)', () => {
-  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  const repoRoot = findRepoRoot(__dirname);
   const webRoot = path.join(repoRoot, 'web');
   const configPath = path.join(webRoot, 'tsconfig.json');
   assert.ok(fs.existsSync(configPath), 'web tsconfig.json not found');

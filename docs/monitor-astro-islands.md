@@ -20,7 +20,7 @@
 
 配套的任务分解（用于交给后续 AI 按步骤执行）见：
 
-- [monitor-astro-islands.tasks.md](monitor-astro-islands.tasks.md)
+- [tasks/monitor-astro-islands.tasks.md](tasks/monitor-astro-islands.tasks.md)
 
 ---
 

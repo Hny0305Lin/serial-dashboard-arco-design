@@ -6,8 +6,18 @@ import os from 'node:os';
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
 
-function repoRootFromTestDir() {
-  return path.resolve(__dirname, '..', '..', '..');
+function findRepoRoot(fromDir: string) {
+  let dir = fromDir;
+  for (let i = 0; i < 10; i++) {
+    const pkg = path.join(dir, 'package.json');
+    const scriptsDir = path.join(dir, 'scripts');
+    const webPkg = path.join(dir, 'web', 'package.json');
+    if (fs.existsSync(pkg) && fs.existsSync(scriptsDir) && fs.existsSync(webPkg)) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(`repo root not found from ${fromDir}`);
 }
 
 function tmpFilePath(prefix: string) {
@@ -24,7 +34,7 @@ async function listenOnRandomPort() {
 }
 
 test('dev:all exits 110 when lock exists and pid is alive', () => {
-  const repoRoot = repoRootFromTestDir();
+  const repoRoot = findRepoRoot(__dirname);
   const devAllPath = path.join(repoRoot, 'scripts', 'dev-all.js');
   const lockPath = tmpFilePath('devall-lock');
   fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }), 'utf8');
@@ -43,7 +53,7 @@ test('dev:all exits 110 when lock exists and pid is alive', () => {
 });
 
 test('dev:all exits 110 when backend port is in use (strict)', async () => {
-  const repoRoot = repoRootFromTestDir();
+  const repoRoot = findRepoRoot(__dirname);
   const devAllPath = path.join(repoRoot, 'scripts', 'dev-all.js');
   const lockPath = tmpFilePath('devall-lock');
 
@@ -70,7 +80,7 @@ test('dev:all exits 110 when backend port is in use (strict)', async () => {
 });
 
 test('dev:all picks new ports when mode is increment', async () => {
-  const repoRoot = repoRootFromTestDir();
+  const repoRoot = findRepoRoot(__dirname);
   const devAllPath = path.join(repoRoot, 'scripts', 'dev-all.js');
   const lockPath = tmpFilePath('devall-lock');
 

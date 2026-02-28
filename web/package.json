@@ -10,7 +10,7 @@
     "preview": "astro preview",
     "astro": "astro",
     "test": "pnpm run test:unit && pnpm run test:e2e",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
   "keywords": [],
@@ -39,6 +39,7 @@
     "@types/react-dom": "18.3.5",
     "@types/react-router-dom": "^5.3.3",
     "@playwright/test": "^1.50.0",
+    "@vitest/coverage-v8": "^3.2.4",
     "jsdom": "^26.1.0",
     "less": "^4.5.1",
     "vitest": "^3.2.4"

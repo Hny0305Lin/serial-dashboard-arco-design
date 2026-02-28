@@ -1,5 +1,5 @@
 
-import { PortManager } from './core/PortManager';
+import { PortManager } from '../core/PortManager';
 
 const manager = new PortManager();
 

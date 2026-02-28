@@ -1,27 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Form, Radio, Input, Switch, Typography, Divider, Button, Message, Tooltip } from '@arco-design/web-react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Card, Form, Radio, Input, Switch, Typography, Divider, Message, Tooltip, Grid, Space } from '@arco-design/web-react';
+import { IconInfoCircle } from '@arco-design/web-react/icon';
 import { useTranslation } from 'react-i18next';
-
-interface AutoSendConfig {
-  enabled: boolean;
-  content: string;
-  encoding: 'hex' | 'utf8';
-}
-
-export interface SerialFilterConfig {
-  enabled: boolean;
-  vendorId: string;
-  productId: string;
-  interfaceId: string;
-}
+import type { AutoSendConfig, DataEncoding, SerialFilterConfig } from '../utils/appSettings';
+import './settings.css';
 
 interface SettingsProps {
   autoSendConfig: AutoSendConfig;
   onAutoSendConfigChange: (config: AutoSendConfig) => void;
   serialFilter: SerialFilterConfig;
   onSerialFilterChange: (config: SerialFilterConfig) => void;
-  sendEncoding: 'hex' | 'utf8';
-  onSendEncodingChange: (encoding: 'hex' | 'utf8') => void;
+  sendEncoding: DataEncoding;
+  onSendEncodingChange: (encoding: DataEncoding) => void;
 }
 
 export default function Settings({
@@ -33,146 +23,231 @@ export default function Settings({
   onSendEncodingChange
 }: SettingsProps) {
   const { t } = useTranslation();
-  // 创建表单实例
   const [form] = Form.useForm();
-  const [filterForm] = Form.useForm();
+  const toastTimerRef = useRef<number | null>(null);
+  const syncingRef = useRef(false);
+  const { Row, Col } = Grid;
 
-  // 监听外部状态变化，同步到表单
+  const initialValues = useMemo(() => {
+    return {
+      sendEncoding,
+      serialFilterEnabled: serialFilter.enabled,
+      serialVendorId: serialFilter.vendorId,
+      serialProductId: serialFilter.productId,
+      serialInterfaceId: serialFilter.interfaceId,
+      autoSendEnabled: autoSendConfig.enabled,
+      autoSendEncoding: autoSendConfig.encoding,
+      autoSendContent: autoSendConfig.content,
+    };
+  }, [autoSendConfig, sendEncoding, serialFilter]);
+
   useEffect(() => {
-    form.setFieldsValue(autoSendConfig);
-  }, [autoSendConfig]);
+    syncingRef.current = true;
+    form.setFieldsValue(initialValues);
+    Promise.resolve().then(() => {
+      syncingRef.current = false;
+    });
+  }, [form, initialValues]);
 
-  useEffect(() => {
-    filterForm.setFieldsValue(serialFilter);
-  }, [serialFilter]);
-
-  const handleSendEncodingChange = (val: any) => {
-    onSendEncodingChange(val);
-    Message.success(t('settings.saveSuccess'));
+  const notifySaved = () => {
+    if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      Message.success(t('settings.saveSuccess'));
+    }, 400);
   };
 
-  const handleAutoSendChange = (_changedValues: Partial<AutoSendConfig>, allValues: AutoSendConfig) => {
-    const newConfig = { ...autoSendConfig, ...allValues };
-    if (JSON.stringify(newConfig) !== JSON.stringify(autoSendConfig)) {
-      onAutoSendConfigChange(newConfig);
-      Message.success(t('settings.saveSuccess'));
+  const onValuesChange = (changed: Record<string, any>, values: Record<string, any>) => {
+    if (syncingRef.current) return;
+    if (Object.prototype.hasOwnProperty.call(changed, 'sendEncoding')) {
+      const v: DataEncoding = values.sendEncoding === 'utf8' ? 'utf8' : 'hex';
+      if (v !== sendEncoding) onSendEncodingChange(v);
     }
-  };
 
-  const handleSerialFilterChange = (_changedValues: Partial<SerialFilterConfig>, allValues: SerialFilterConfig) => {
-    const newConfig = { ...serialFilter, ...allValues };
-    if (JSON.stringify(newConfig) !== JSON.stringify(serialFilter)) {
-      onSerialFilterChange(newConfig);
-      Message.success(t('settings.saveSuccess'));
+    if (
+      Object.prototype.hasOwnProperty.call(changed, 'serialFilterEnabled') ||
+      Object.prototype.hasOwnProperty.call(changed, 'serialVendorId') ||
+      Object.prototype.hasOwnProperty.call(changed, 'serialProductId') ||
+      Object.prototype.hasOwnProperty.call(changed, 'serialInterfaceId')
+    ) {
+      const next: SerialFilterConfig = {
+        enabled: !!values.serialFilterEnabled,
+        vendorId: String(values.serialVendorId ?? ''),
+        productId: String(values.serialProductId ?? ''),
+        interfaceId: String(values.serialInterfaceId ?? ''),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(serialFilter)) onSerialFilterChange(next);
     }
+
+    if (
+      Object.prototype.hasOwnProperty.call(changed, 'autoSendEnabled') ||
+      Object.prototype.hasOwnProperty.call(changed, 'autoSendEncoding') ||
+      Object.prototype.hasOwnProperty.call(changed, 'autoSendContent')
+    ) {
+      const next: AutoSendConfig = {
+        enabled: !!values.autoSendEnabled,
+        encoding: values.autoSendEncoding === 'utf8' ? 'utf8' : 'hex',
+        content: String(values.autoSendContent ?? ''),
+      };
+      if (JSON.stringify(next) !== JSON.stringify(autoSendConfig)) onAutoSendConfigChange(next);
+    }
+
+    notifySaved();
   };
 
 
   return (
-    <Card title={t('menu.settings')} bordered={false}>
-      <Typography.Title heading={6}>{t('settings.title')}</Typography.Title>
+    <Card bordered={false} className="wsc-settings-card">
+      <Space direction="vertical" size={24} style={{ width: '100%' }}>
+        <div className="wsc-settings-header">
+          <Typography.Title heading={4} style={{ margin: 0 }}>
+            {t('menu.settings')}
+          </Typography.Title>
+          <Typography.Text type="secondary">{t('settings.title')}</Typography.Text>
+        </div>
 
-      {/* 全局发送配置 */}
-      <Divider orientation="left">{t('settings.general.title')}</Divider>
-      <Form layout="vertical">
-        <Form.Item label={t('settings.general.dataFormat')} style={{ marginBottom: 24 }}>
-          <Radio.Group
-            type="button"
-            value={sendEncoding}
-            onChange={handleSendEncodingChange}
+        <Form form={form} layout="vertical" initialValues={initialValues} onValuesChange={onValuesChange}>
+          <Divider orientation="left">{t('settings.general.title')}</Divider>
+          <Form.Item
+            field="sendEncoding"
+            label={
+              <Space size={8}>
+                <span>{t('settings.general.dataFormat')}</span>
+                <Tooltip content={t('tooltip.dataFormat')}>
+                  <IconInfoCircle aria-label={t('tooltip.dataFormat')} />
+                </Tooltip>
+              </Space>
+            }
+            style={{ marginBottom: 24 }}
           >
-            <Radio value="hex">
-              <Tooltip content={t('tooltip.dataFormat')}>
-                {t('text.hex')}
-              </Tooltip>
-            </Radio>
-            <Radio value="utf8">
-              <Tooltip content={t('tooltip.dataFormat')}>
-                {t('text.text')}
-              </Tooltip>
-            </Radio>
-          </Radio.Group>
-          <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+            <Radio.Group type="button" data-testid="settings-send-encoding">
+              <Radio value="hex">{t('text.hex')}</Radio>
+              <Radio value="utf8">{t('text.text')}</Radio>
+            </Radio.Group>
+          </Form.Item>
+          <Typography.Text type="secondary" className="wsc-settings-help">
             {t('settings.general.dataFormatDesc')}
           </Typography.Text>
-        </Form.Item>
-      </Form>
 
-      <Form
-        form={filterForm}
-        layout="vertical"
-        initialValues={serialFilter}
-        onValuesChange={(changed, values) => handleSerialFilterChange(changed, values as SerialFilterConfig)}
-      >
-        <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
-        <Form.Item label={t('settings.deviceAdaptation.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: serialFilter.enabled ? 24 : 0 }}>
-          <Switch />
-        </Form.Item>
+          <Divider orientation="left">{t('settings.deviceAdaptation.title')}</Divider>
+          <Form.Item
+            field="serialFilterEnabled"
+            triggerPropName="checked"
+            label={
+              <Space size={8}>
+                <span>{t('settings.deviceAdaptation.enable')}</span>
+              </Space>
+            }
+            style={{ marginBottom: 16 }}
+          >
+            <Switch data-testid="settings-serial-filter-enabled" />
+          </Form.Item>
 
-        {serialFilter.enabled && (
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-            <Form.Item label={t('settings.deviceAdaptation.vendorId')} field="vendorId" style={{ flex: 1, minWidth: 120 }}>
-              <Tooltip content={t('tooltip.vendorId')} trigger="hover">
-                <Input placeholder="e.g. 19D1" />
-              </Tooltip>
-            </Form.Item>
-            <Form.Item label={t('settings.deviceAdaptation.productId')} field="productId" style={{ flex: 1, minWidth: 120 }}>
-              <Tooltip content={t('tooltip.productId')} trigger="hover">
-                <Input placeholder="e.g. 0001" />
-              </Tooltip>
-            </Form.Item>
-            <Form.Item label={t('settings.deviceAdaptation.interfaceId')} field="interfaceId" style={{ flex: 1, minWidth: 120 }}>
-              <Tooltip content={t('tooltip.interfaceId')} trigger="hover">
-                <Input placeholder="e.g. 02" />
-              </Tooltip>
-            </Form.Item>
+          <div className="wsc-settings-collapse" data-open={serialFilter.enabled ? 'true' : 'false'}>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} sm={8} md={8} lg={8} xl={8} xxl={8}>
+                <Form.Item
+                  field="serialVendorId"
+                  label={
+                    <Space size={8}>
+                      <span>{t('settings.deviceAdaptation.vendorId')}</span>
+                      <Tooltip content={t('tooltip.vendorId')}>
+                        <IconInfoCircle aria-label={t('tooltip.vendorId')} />
+                      </Tooltip>
+                    </Space>
+                  }
+                >
+                  <Input placeholder="e.g. 19D1" disabled={!serialFilter.enabled} data-testid="settings-serial-vendorId" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={8} md={8} lg={8} xl={8} xxl={8}>
+                <Form.Item
+                  field="serialProductId"
+                  label={
+                    <Space size={8}>
+                      <span>{t('settings.deviceAdaptation.productId')}</span>
+                      <Tooltip content={t('tooltip.productId')}>
+                        <IconInfoCircle aria-label={t('tooltip.productId')} />
+                      </Tooltip>
+                    </Space>
+                  }
+                >
+                  <Input placeholder="e.g. 0001" disabled={!serialFilter.enabled} data-testid="settings-serial-productId" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={8} md={8} lg={8} xl={8} xxl={8}>
+                <Form.Item
+                  field="serialInterfaceId"
+                  label={
+                    <Space size={8}>
+                      <span>{t('settings.deviceAdaptation.interfaceId')}</span>
+                      <Tooltip content={t('tooltip.interfaceId')}>
+                        <IconInfoCircle aria-label={t('tooltip.interfaceId')} />
+                      </Tooltip>
+                    </Space>
+                  }
+                >
+                  <Input placeholder="e.g. 02" disabled={!serialFilter.enabled} data-testid="settings-serial-interfaceId" />
+                </Form.Item>
+              </Col>
+            </Row>
           </div>
-        )}
-        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          {t('settings.deviceAdaptation.description')}
-        </Typography.Text>
-      </Form>
+          <Typography.Text type="secondary" className="wsc-settings-help">
+            {t('settings.deviceAdaptation.description')}
+          </Typography.Text>
 
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={autoSendConfig}
-        onValuesChange={(changed, values) => handleAutoSendChange(changed, values as AutoSendConfig)}
-      >
+          <Divider orientation="left">{t('settings.autoSend.title')}</Divider>
+          <Form.Item field="autoSendEnabled" triggerPropName="checked" label={t('settings.autoSend.enable')} style={{ marginBottom: 16 }}>
+            <Switch data-testid="settings-autosend-enabled" />
+          </Form.Item>
 
-        <Divider orientation="left">{t('settings.autoSend.title')}</Divider>
-
-        <Form.Item label={t('settings.autoSend.enable')} field="enabled" triggerPropName="checked" style={{ marginBottom: autoSendConfig.enabled ? 24 : 0 }}>
-          <Switch />
-        </Form.Item>
-
-        {autoSendConfig.enabled && (
-          <>
-            <Form.Item label={t('settings.autoSend.format')} field="encoding">
-              <Radio.Group type="button">
-                <Radio value="hex">
-                  <Tooltip content={t('tooltip.autoSendFormat')}>
-                    {t('text.hex')}
-                  </Tooltip>
-                </Radio>
-                <Radio value="utf8">
-                  <Tooltip content={t('tooltip.autoSendFormat')}>
-                    {t('text.text')}
-                  </Tooltip>
-                </Radio>
-              </Radio.Group>
-            </Form.Item>
-            <Form.Item label={t('settings.autoSend.content')} field="content" rules={[{ required: true }]}>
-              <Tooltip content={t('tooltip.autoSendContent')} trigger="focus" position="top">
-                <Input placeholder={t('settings.autoSend.placeholder')} />
-              </Tooltip>
-            </Form.Item>
-          </>
-        )}
-        <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          {t('settings.autoSend.description')}
-        </Typography.Text>
-      </Form>
+          <div className="wsc-settings-collapse" data-open={autoSendConfig.enabled ? 'true' : 'false'}>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  field="autoSendEncoding"
+                  label={
+                    <Space size={8}>
+                      <span>{t('settings.autoSend.format')}</span>
+                      <Tooltip content={t('tooltip.autoSendFormat')}>
+                        <IconInfoCircle aria-label={t('tooltip.autoSendFormat')} />
+                      </Tooltip>
+                    </Space>
+                  }
+                >
+                  <Radio.Group type="button" disabled={!autoSendConfig.enabled} data-testid="settings-autosend-encoding">
+                    <Radio value="hex">{t('text.hex')}</Radio>
+                    <Radio value="utf8">{t('text.text')}</Radio>
+                  </Radio.Group>
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  field="autoSendContent"
+                  label={
+                    <Space size={8}>
+                      <span>{t('settings.autoSend.content')}</span>
+                      <Tooltip content={t('tooltip.autoSendContent')}>
+                        <IconInfoCircle aria-label={t('tooltip.autoSendContent')} />
+                      </Tooltip>
+                    </Space>
+                  }
+                  rules={[{ required: autoSendConfig.enabled }]}
+                >
+                  <Input
+                    placeholder={t('settings.autoSend.placeholder')}
+                    disabled={!autoSendConfig.enabled}
+                    data-testid="settings-autosend-content"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          </div>
+          <Typography.Text type="secondary" className="wsc-settings-help">
+            {t('settings.autoSend.description')}
+          </Typography.Text>
+        </Form>
+      </Space>
     </Card>
   );
 }

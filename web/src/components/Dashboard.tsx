@@ -34,27 +34,21 @@ import { useTranslation } from 'react-i18next';
 import '../i18n';
 import '@arco-design/web-react/dist/css/arco.css';
 import Settings from './Settings';
-import type { SerialFilterConfig } from './Settings';
 import DashboardHome from './DashboardHome';
-import MonitorCanvas from './Monitor/MonitorCanvas';
 import type { PortInfo } from '../types';
 import { useSerialPortController } from '../hooks/useSerialPortController';
+import { useAppSettings } from '../hooks/useAppSettings';
 import { getApiBaseUrl, getWsUrl } from '../utils/net';
+import type { AutoSendConfig, DataEncoding, SerialFilterConfig } from '../utils/appSettings';
 
-import LogSavePage from './LogSavePage';
+const MonitorCanvasLazy = React.lazy(() => import('./Monitor/MonitorCanvas'));
+const LogSavePageLazy = React.lazy(() => import('./LogSavePage'));
 
 const { Sider, Header, Content, Footer } = Layout;
 const { Option } = Select;
 const MenuItem = Menu.Item;
-const SubMenu = Menu.SubMenu;
 const FormItem = Form.Item;
 const { Row, Col } = Grid;
-
-interface AutoSendConfig {
-  enabled: boolean;
-  content: string;
-  encoding: 'hex' | 'utf8';
-}
 
 class MonitorErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
@@ -97,10 +91,10 @@ function AppContent() {
   // 发送相关
   const [sendPath, setSendPath] = useState<string>('');
   const [sendContent, setSendContent] = useState('');
-  const [sendEncoding, setSendEncoding] = useState<'hex' | 'utf8'>(() => {
-    const saved = localStorage.getItem('sendEncoding');
-    return (saved as 'hex' | 'utf8') || 'hex';
-  });
+  const { settings: appSettings, setSendEncoding, setSerialFilter, setAutoSend } = useAppSettings();
+  const sendEncoding: DataEncoding = appSettings.sendEncoding;
+  const serialFilter: SerialFilterConfig = appSettings.serialFilter;
+  const autoSend: AutoSendConfig = appSettings.autoSend;
   const [sending, setSending] = useState(false);
 
   const serial = useSerialPortController({ ws });
@@ -120,10 +114,6 @@ function AppContent() {
       if (!silent) Message.error(t('msg.fetchFailed'));
     }
   }, [serial, t, sendPath]);
-
-  useEffect(() => {
-    localStorage.setItem('sendEncoding', sendEncoding);
-  }, [sendEncoding]);
 
   // Sync menu selection with URL
   useEffect(() => {
@@ -183,16 +173,6 @@ function AppContent() {
     immersiveActiveRef.current = false;
   }, [shouldImmersive, collapsed]);
 
-  // 设备适配过滤器
-  const [serialFilter, setSerialFilter] = useState<SerialFilterConfig>(() => {
-    const saved = localStorage.getItem('serialFilterConfig');
-    return saved ? JSON.parse(saved) : { enabled: false, vendorId: '19D1', productId: '0001', interfaceId: '02' };
-  });
-
-  useEffect(() => {
-    localStorage.setItem('serialFilterConfig', JSON.stringify(serialFilter));
-  }, [serialFilter]);
-
   // 应用过滤器逻辑
   useEffect(() => {
     if (!serialFilter.enabled) {
@@ -219,15 +199,8 @@ function AppContent() {
     setPorts(filtered);
   }, [allPorts, serialFilter]);
 
-  // 自动发送相关
-  const [autoSend, setAutoSend] = useState<AutoSendConfig>(() => {
-    const saved = localStorage.getItem('autoSendConfig');
-    return saved ? JSON.parse(saved) : { enabled: false, content: '00', encoding: 'hex' };
-  });
-
-  useEffect(() => {
-    localStorage.setItem('autoSendConfig', JSON.stringify(autoSend));
-  }, [autoSend]);
+  const updateSerialFilter = useCallback((next: SerialFilterConfig) => setSerialFilter(next), [setSerialFilter]);
+  const updateAutoSend = useCallback((next: AutoSendConfig) => setAutoSend(next), [setAutoSend]);
 
   // 统计信息
   const activePortsCount = ports.filter(p => p.status === 'open').length;
@@ -489,30 +462,12 @@ function AppContent() {
   };
 
   const menuRoutes = [
-    {
-      name: t('menu.dashboard'),
-      key: '1',
-      icon: <IconDashboard />,
-      children: [
-        { name: t('menu.workplace'), key: '1-1' },
-        { name: t('menu.monitor'), key: '1-2' }
-      ]
-    },
-    {
-      name: t('menu.visualization'),
-      key: '2',
-      icon: <IconApps />,
-      children: [
-        { name: 'Analysis', key: '2-1' },
-        { name: 'Multi-Dimension', key: '2-2' }
-      ]
-    },
-    {
-      name: t('menu.settings'),
-      key: '3',
-      icon: <IconSettings />
-    }
-  ];
+    { name: t('menu.workplace'), key: '1-1', icon: <IconDashboard /> },
+    { name: t('menu.monitor'), key: '1-2', icon: <IconDashboard /> },
+    { name: 'Analysis', key: '2-1', icon: <IconApps />, disabled: true },
+    { name: 'Multi-Dimension', key: '2-2', icon: <IconApps />, disabled: true },
+    { name: t('menu.settings'), key: '3', icon: <IconSettings /> },
+  ] as const;
 
   return (
     <>
@@ -525,7 +480,6 @@ function AppContent() {
             onCollapse={setCollapsed}
             collapsible
             trigger={null}
-            breakpoint="xl"
             style={{ boxShadow: '0 2px 5px 0 rgba(0,0,0,0.08)', position: 'relative', zIndex: 250 }}
           >
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -549,25 +503,8 @@ function AppContent() {
                 hasCollapseButton={false}
               >
                 {menuRoutes.map((route) => {
-                  if (route.children) {
-                    return (
-                      <SubMenu
-                        key={route.key}
-                        title={
-                          <span>
-                            {route.icon}
-                            <span style={{ marginLeft: 10 }}>{route.name}</span>
-                          </span>
-                        }
-                      >
-                        {route.children.map((child) => (
-                          <MenuItem key={child.key}>{child.name}</MenuItem>
-                        ))}
-                      </SubMenu>
-                    );
-                  }
                   return (
-                    <MenuItem key={route.key}>
+                    <MenuItem key={route.key} disabled={!!(route as any).disabled}>
                       {route.icon}
                       <span style={{ marginLeft: 10 }}>{route.name}</span>
                     </MenuItem>
@@ -588,6 +525,8 @@ function AppContent() {
                   size="small"
                   onClick={() => setCollapsed(!collapsed)}
                   icon={collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+                  aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+                  title={collapsed ? '展开侧边栏' : '收起侧边栏'}
                   style={{
                     color: 'var(--color-text-2)',
                     fontSize: 16,
@@ -612,7 +551,7 @@ function AppContent() {
                 </Breadcrumb>
               </Space>
               <Space size="medium">
-                <Button shape="circle" icon={<IconLanguage />} onClick={toggleLang} />
+                <Button shape="circle" icon={<IconLanguage />} onClick={toggleLang} aria-label="切换语言" title="切换语言" />
                 <Avatar size={32} style={{ backgroundColor: '#3370ff' }}><IconUser /></Avatar>
               </Space>
             </Header>
@@ -623,25 +562,29 @@ function AppContent() {
               <Route path="/settings">
                 <Settings
                   autoSendConfig={autoSend}
-                  onAutoSendConfigChange={setAutoSend}
+                  onAutoSendConfigChange={updateAutoSend}
                   serialFilter={serialFilter}
-                  onSerialFilterChange={setSerialFilter}
+                  onSerialFilterChange={updateSerialFilter}
                   sendEncoding={sendEncoding}
                   onSendEncodingChange={setSendEncoding}
                 />
               </Route>
               <Route path="/monitor">
                 <MonitorErrorBoundary>
-                  <MonitorCanvas
-                    ws={ws}
-                    wsConnected={wsConnected}
-                    portList={ports.map(p => p.path)}
-                    onRefreshPorts={() => fetchPorts(true)}
-                  />
+                  <React.Suspense fallback={<div />}>
+                    <MonitorCanvasLazy
+                      ws={ws}
+                      wsConnected={wsConnected}
+                      portList={ports.map(p => p.path)}
+                      onRefreshPorts={() => fetchPorts(true)}
+                    />
+                  </React.Suspense>
                 </MonitorErrorBoundary>
               </Route>
               <Route path="/save-logs">
-                <LogSavePage currentLogs={logs} />
+                <React.Suspense fallback={<div />}>
+                  <LogSavePageLazy currentLogs={logs} />
+                </React.Suspense>
               </Route>
               <Route path="/">
                 <DashboardHome
@@ -673,68 +616,69 @@ function AppContent() {
             </Switch>
           </Content>
           {!isMonitor && (
-            <Footer style={{ textAlign: 'center', color: '#86909c', padding: '16px 0' }}>
+            <Footer style={{ textAlign: 'center', color: 'var(--color-text-2)', padding: '16px 0' }}>
               {t('footer.copyright')}
             </Footer>
           )}
         </Layout>
 
-        <Modal
-          title={t('modal.openPortWith', { port: form.getFieldValue('path') || '...' })}
-          visible={visible}
-          onOk={handleOpen}
-          onCancel={() => setVisible(false)}
-          autoFocus={false}
-          focusLock={true}
-        >
-          <Form form={form} layout="vertical" initialValues={{ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none' }}>
-            <FormItem label={t('port.path')} field="path" rules={[{ required: true }]}>
-              <Input disabled />
-            </FormItem>
-            <Row gutter={16}>
-              <Col span={12}>
-                <FormItem label={t('port.baudRate')} field="baudRate" rules={[{ required: true }]}>
-                  <Select>
-                    <Option value={115200}>115200</Option>
-                    <Option value={921600}>921600</Option>
-                    <Option value={9600}>9600</Option>
-                    <Option value={19200}>19200</Option>
-                    <Option value={38400}>38400</Option>
-                    <Option value={57600}>57600</Option>
-                  </Select>
-                </FormItem>
-              </Col>
-              <Col span={12}>
-                <FormItem label={t('port.dataBits')} field="dataBits">
-                  <Select>
-                    <Option value={8}>8</Option>
-                    <Option value={7}>7</Option>
-                  </Select>
-                </FormItem>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={12}>
-                <FormItem label={t('port.stopBits')} field="stopBits">
-                  <Select>
-                    <Option value={1}>1</Option>
-                    <Option value={2}>2</Option>
-                  </Select>
-                </FormItem>
-              </Col>
-              <Col span={12}>
-                <FormItem label={t('port.parity')} field="parity">
-                  <Select>
-                    <Option value="none">None</Option>
-                    <Option value="even">Even</Option>
-                    <Option value="odd">Odd</Option>
-                  </Select>
-                </FormItem>
-              </Col>
-            </Row>
-
-          </Form>
-        </Modal>
+        {visible ? (
+          <Modal
+            title={t('modal.openPortWith', { port: form.getFieldValue('path') || '...' })}
+            visible={visible}
+            onOk={handleOpen}
+            onCancel={() => setVisible(false)}
+            autoFocus={false}
+            focusLock={true}
+          >
+            <Form form={form} layout="vertical" initialValues={{ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none' }}>
+              <FormItem label={t('port.path')} field="path" rules={[{ required: true }]}>
+                <Input disabled />
+              </FormItem>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <FormItem label={t('port.baudRate')} field="baudRate" rules={[{ required: true }]}>
+                    <Select>
+                      <Option value={115200}>115200</Option>
+                      <Option value={921600}>921600</Option>
+                      <Option value={9600}>9600</Option>
+                      <Option value={19200}>19200</Option>
+                      <Option value={38400}>38400</Option>
+                      <Option value={57600}>57600</Option>
+                    </Select>
+                  </FormItem>
+                </Col>
+                <Col span={12}>
+                  <FormItem label={t('port.dataBits')} field="dataBits">
+                    <Select>
+                      <Option value={8}>8</Option>
+                      <Option value={7}>7</Option>
+                    </Select>
+                  </FormItem>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <FormItem label={t('port.stopBits')} field="stopBits">
+                    <Select>
+                      <Option value={1}>1</Option>
+                      <Option value={2}>2</Option>
+                    </Select>
+                  </FormItem>
+                </Col>
+                <Col span={12}>
+                  <FormItem label={t('port.parity')} field="parity">
+                    <Select>
+                      <Option value="none">None</Option>
+                      <Option value="even">Even</Option>
+                      <Option value="odd">Odd</Option>
+                    </Select>
+                  </FormItem>
+                </Col>
+              </Row>
+            </Form>
+          </Modal>
+        ) : null}
       </Layout>
     </>
   );

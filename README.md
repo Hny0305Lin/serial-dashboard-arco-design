@@ -165,12 +165,16 @@ Forwarding 配置文件：
 .
 ├─ src/                 后端 TypeScript 源码
 ├─ web/                 前端 Astro + React
-├─ docs/                设计/排障/使用文档
-├─ scripts/             开发编排与互斥锁相关脚本
+├─ docs/                设计/排障/使用文档（含 tasks/、reports/）
+├─ scripts/             开发编排与互斥锁相关脚本（含 scratch/）
 ├─ data/                运行时数据目录（默认，建议加入 .gitignore）
 ├─ README.md
 └─ LICENSE
 ```
+
+更详细的存放规则见：
+
+- [docs/structure.md](docs/structure.md)
 
 ## 登录与访问控制（TOTP + 公共访问链接）
 
@@ -184,7 +188,7 @@ Forwarding 配置文件：
 配套文档（用于交给后续 AI 按步骤执行）：
 
 - [docs/auth-totp-public-link.md](docs/auth-totp-public-link.md)
-- [docs/auth-totp-public-link.tasks.md](docs/auth-totp-public-link.tasks.md)
+- [docs/tasks/auth-totp-public-link.tasks.md](docs/tasks/auth-totp-public-link.tasks.md)
 
 ### 权限模型
 
@@ -612,7 +616,7 @@ Endpoint（开发默认）：`ws://localhost:9001/ws`
 如果你希望把实时监控页从“单体 React 组件树”升级为“Astro 页面组织 + React Islands 运行”的架构（保留核心大地图/画布为 React Island，小组件迁移为 Astro 外壳 + 独立 islands），请参考：
 
 - [docs/monitor-astro-islands.md](docs/monitor-astro-islands.md)
-- [docs/monitor-astro-islands.tasks.md](docs/monitor-astro-islands.tasks.md)
+- [docs/tasks/monitor-astro-islands.tasks.md](docs/tasks/monitor-astro-islands.tasks.md)
 
 ## 构建与部署
 
