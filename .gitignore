@@ -121,3 +121,15 @@ data/
 
 # Local tests (optional)
 src/test/forwarding/
+
+# Playwright test results
+playwright-report/
+test-results/
+playwright/.cache/
+
+# Vitest test cache
+.vitest/
+*.vitest.*
+
+# Astro build cache
+web/.astro/

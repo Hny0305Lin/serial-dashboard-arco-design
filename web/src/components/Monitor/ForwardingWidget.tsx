@@ -5,6 +5,7 @@ import type { MonitorWidget, CanvasState } from './types';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { getApiBaseUrl } from '../../utils/net';
 import { useForwardingMetrics } from '../../hooks/useForwardingMetrics';
+import { buildForwardingNextConfigForWidget } from './forwardingConfigDraft.ts';
 
 type ForwardingMetricsSnapshot = {
   ts: number;
@@ -132,6 +133,7 @@ export default function ForwardingWidget(props: {
     onOpenConfig,
     autoOpenSettings,
     onAutoOpenSettingsConsumed,
+    onUpdate,
     onLockChange,
     onRemove,
     onResizeMouseDown
@@ -149,6 +151,12 @@ export default function ForwardingWidget(props: {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dragScrollRef = useRef<{ active: boolean; startX: number; startScrollLeft: number; moved: boolean }>({ active: false, startX: 0, startScrollLeft: 0, moved: false });
   const [form] = Form.useForm();
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const autoSaveInFlightRef = useRef(false);
+  const autoSavePendingRef = useRef(false);
+  const ignoreAutoSaveRef = useRef(false);
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
+  const [autoSaveError, setAutoSaveError] = useState<string>('');
 
   const globalEnabled = metrics?.enabled ?? config?.enabled ?? false;
   const metricsChannels = useMemo(() => metrics?.channels || [], [metrics]);
@@ -160,6 +168,39 @@ export default function ForwardingWidget(props: {
     for (const c of metricsChannels) m.set(String(c.channelId), c);
     return m;
   }, [metricsChannels]);
+
+  const activityPrevRef = useRef<Map<string, { total: number; lastSuccessAt: number }>>(new Map());
+  useEffect(() => {
+    if (!metrics) return;
+    if (!ownedChannelConfigs.length) return;
+    const prev = activityPrevRef.current;
+    let hasDelta = false;
+    let maxActivityAt = 0;
+    for (const cc of ownedChannelConfigs) {
+      const id = String(cc?.id || '').trim();
+      if (!id) continue;
+      const m = metricsById.get(id);
+      if (!m) continue;
+      const sent = Number(m.sent || 0);
+      const failed = Number(m.failed || 0);
+      const dropped = Number(m.dropped || 0);
+      const lastSuccessAt = Number(m.lastSuccessAt || 0);
+      const total = sent + failed + dropped;
+      const prevEntry = prev.get(id) || { total: 0, lastSuccessAt: 0 };
+      if (total > prevEntry.total || lastSuccessAt > prevEntry.lastSuccessAt) {
+        hasDelta = true;
+      }
+      if (lastSuccessAt > maxActivityAt) maxActivityAt = lastSuccessAt;
+      prev.set(id, { total, lastSuccessAt });
+    }
+    activityPrevRef.current = prev;
+    if (!hasDelta) return;
+    const ts = Number(metrics.ts || 0) || Date.now();
+    const nextActivityAt = Math.max(ts, maxActivityAt || 0);
+    if (!nextActivityAt) return;
+    if (typeof widget.lastRxAt === 'number' && widget.lastRxAt >= nextActivityAt) return;
+    onUpdate(widget.id, { lastRxAt: nextActivityAt });
+  }, [metrics, metricsById, onUpdate, ownedChannelConfigs, widget.id, widget.lastRxAt]);
 
   type ChannelHealth = 'pending' | 'bad' | 'recovering' | 'suspect' | 'ok';
   const channelHealthByIdRef = useRef<Map<string, ChannelHealth>>(new Map());
@@ -313,6 +354,19 @@ export default function ForwardingWidget(props: {
   }, [settingsOpen]);
 
   useEffect(() => {
+    if (settingsOpen) return;
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    autoSaveInFlightRef.current = false;
+    autoSavePendingRef.current = false;
+    ignoreAutoSaveRef.current = false;
+    setAutoSaveState('idle');
+    setAutoSaveError('');
+  }, [settingsOpen]);
+
+  useEffect(() => {
     onLockChange(!!settingsOpen);
     return () => onLockChange(false);
   }, [settingsOpen, onLockChange]);
@@ -357,7 +411,11 @@ export default function ForwardingWidget(props: {
       const allSources = Array.isArray((next as any)?.sources) ? (next as any).sources : [];
       const ownedSources = allSources.filter((s: any) => String(s?.ownerWidgetId || '') === String(widget.id));
       const ownedEnabled = owned.some((c: any) => !!c?.enabled);
+      ignoreAutoSaveRef.current = true;
       form.setFieldsValue({ enabled: ownedEnabled, sources: ownedSources, channels: owned });
+      setTimeout(() => {
+        ignoreAutoSaveRef.current = false;
+      }, 0);
     }
   };
 
@@ -374,8 +432,86 @@ export default function ForwardingWidget(props: {
       const allSources = Array.isArray((next as any)?.sources) ? (next as any).sources : [];
       const ownedSources = allSources.filter((s: any) => String(s?.ownerWidgetId || '') === String(widget.id));
       const ownedEnabled = owned.some((c: any) => !!c?.enabled);
+      ignoreAutoSaveRef.current = true;
       form.setFieldsValue({ enabled: ownedEnabled, sources: ownedSources, channels: owned });
+      setTimeout(() => {
+        ignoreAutoSaveRef.current = false;
+      }, 0);
     }
+  };
+
+  const saveConfigInternal = async (next: any, opts?: { silent?: boolean; closeModal?: boolean }) => {
+    const { silent = false, closeModal = false } = opts || {};
+    const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next)
+    });
+    if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'save failed'));
+    setConfig(json.data as any);
+    if (closeModal) setSettingsOpen(false);
+    if (!silent) Message.success('配置已保存');
+  };
+
+  const scheduleAutoSave = () => {
+    if (!settingsOpen) return;
+    if (ignoreAutoSaveRef.current) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      const run = async () => {
+        if (autoSaveInFlightRef.current) {
+          autoSavePendingRef.current = true;
+          return;
+        }
+        autoSaveInFlightRef.current = true;
+        setAutoSaveState('saving');
+        setAutoSaveError('');
+        try {
+          const values = await form.validate();
+          const latest = await loadConfigRaw();
+          const base: any = latest || config || { version: 1, enabled: false, sources: [], channels: [] };
+          const { next, ownedNextSources } = buildForwardingNextConfigForWidget({
+            base,
+            widgetId: String(widget.id),
+            values,
+            normalizePath
+          });
+
+          const baseSources = Array.isArray(base?.sources) ? base.sources : [];
+          const enabledPorts: string[] = ownedNextSources.filter((s: any) => !!s?.enabled).map((s: any) => String(s?.portPath || '').trim()).filter((p: string) => !!p);
+          if (enabledPorts.length > 0) {
+            const baseEnabledByPort = new Map<string, any>();
+            for (const s of baseSources) {
+              if (!s || !s.enabled) continue;
+              const owner = String(s?.ownerWidgetId || '');
+              if (owner && owner === String(widget.id)) continue;
+              const p = String(s?.portPath || '').trim();
+              if (!p) continue;
+              baseEnabledByPort.set(normalizePath(p), s);
+            }
+            const conflicts = enabledPorts.filter((p: string) => baseEnabledByPort.has(normalizePath(p)));
+            if (conflicts.length > 0) {
+              setAutoSaveState('error');
+              setAutoSaveError(`数据源端口冲突：${Array.from(new Set(conflicts)).join(', ')} 已被其他转发组件占用`);
+              return;
+            }
+          }
+
+          await saveConfigInternal(next, { silent: true });
+          setAutoSaveState('idle');
+        } catch (e: any) {
+          setAutoSaveState('error');
+          setAutoSaveError(String(e?.message || '自动保存失败'));
+        } finally {
+          autoSaveInFlightRef.current = false;
+          if (autoSavePendingRef.current) {
+            autoSavePendingRef.current = false;
+            scheduleAutoSave();
+          }
+        }
+      };
+      run().catch(() => undefined);
+    }, 800);
   };
 
   const onStripPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -445,24 +581,14 @@ export default function ForwardingWidget(props: {
       const latest = await loadConfigRaw();
       const base: any = latest || config || { version: 1, enabled: false, sources: [], channels: [] };
       const baseChannels = Array.isArray(base?.channels) ? base.channels : [];
-      const others = baseChannels.filter((c: any) => String(c?.ownerWidgetId || '') !== String(widget.id));
-      const ownedNext = Array.isArray(values.channels)
-        ? values.channels.map((c: any) => ({ ...c, ownerWidgetId: widget.id, enabled: !!c?.enabled }))
-        : [];
       const baseSources = Array.isArray(base?.sources) ? base.sources : [];
-      const ownedNextSources = Array.isArray(values.sources) ? values.sources.map((s: any) => ({ ...s, ownerWidgetId: widget.id, enabled: !!s?.enabled })) : [];
-      const ownedPortKeys = new Set<string>(ownedNextSources.map((s: any) => normalizePath(String(s?.portPath || ''))).filter((s: string) => !!s));
-      const otherSources = baseSources.filter((s: any) => {
-        const owner = String(s?.ownerWidgetId || '');
-        if (owner && owner === String(widget.id)) return false;
-        const portKey = normalizePath(String(s?.portPath || ''));
-        if (!owner && ownedPortKeys.has(portKey)) return false;
-        return true;
+      const { next, ownedNextSources } = buildForwardingNextConfigForWidget({
+        base,
+        widgetId: String(widget.id),
+        values,
+        normalizePath
       });
-      const enabledPorts: string[] = ownedNextSources
-        .filter((s: any) => !!s?.enabled)
-        .map((s: any) => String(s?.portPath || '').trim())
-        .filter((p: string) => !!p);
+      const enabledPorts: string[] = ownedNextSources.filter((s: any) => !!s?.enabled).map((s: any) => String(s?.portPath || '').trim()).filter((p: string) => !!p);
       if (enabledPorts.length > 0) {
         const baseEnabledByPort = new Map<string, any>();
         for (const s of baseSources) {
@@ -479,13 +605,6 @@ export default function ForwardingWidget(props: {
           return;
         }
       }
-      const next: any = {
-        ...base,
-        version: 1,
-        enabled: [...others, ...ownedNext].some((c: any) => !!c?.enabled),
-        sources: [...otherSources, ...ownedNextSources],
-        channels: [...others, ...ownedNext]
-      };
       if (baseChannels.length > 0 && next.channels.length === 0) {
         const ok = await new Promise<boolean>((resolve) => {
           Modal.confirm({
@@ -498,15 +617,7 @@ export default function ForwardingWidget(props: {
         });
         if (!ok) return;
       }
-      const { res, json, text } = await fetchJson(`${getApiBaseUrl()}/forwarding/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next)
-      });
-      if (!res.ok || json?.code !== 0) throw new Error(buildHttpError(res, json, text, 'save failed'));
-      setConfig(json.data as any);
-      Message.success('配置已保存');
-      setSettingsOpen(false);
+      await saveConfigInternal(next, { silent: false, closeModal: true });
       reloadLogs().catch(() => undefined);
       const openKeys = new Set<string>(serial.allPorts.filter(p => p && p.status === 'open').map(p => normalizePath(p.path)));
       const missing = (ownedNextSources || [])
@@ -527,6 +638,7 @@ export default function ForwardingWidget(props: {
   return (
     <div
       className="monitor-widget"
+      data-monitor-widget-id={widget.id}
       style={{
         position: 'absolute',
         left: 0,
@@ -755,8 +867,14 @@ export default function ForwardingWidget(props: {
         wrapStyle={{ overflow: 'hidden' } as any}
       >
         <div style={{ overflow: 'visible' }}>
-          <Form form={form} layout="vertical">
-            <Tabs activeTab={settingsTab} onChange={(k) => setSettingsTab(String(k))}>
+          <Form
+            form={form}
+            layout="vertical"
+            onValuesChange={() => {
+              scheduleAutoSave();
+            }}
+          >
+            <Tabs activeTab={settingsTab} onChange={(k) => setSettingsTab(String(k))} lazyload={false} destroyOnHide={false}>
               <Tabs.TabPane key="general" title="总开关">
                 <Form.Item field="enabled" label="启用当前转发" triggerPropName="checked">
                   <Switch
@@ -1052,6 +1170,13 @@ export default function ForwardingWidget(props: {
               </Tabs.TabPane>
             </Tabs>
           </Form>
+          {autoSaveState !== 'idle' && (
+            <div style={{ marginTop: 10 }}>
+              <Typography.Text type={autoSaveState === 'error' ? 'error' : 'secondary'}>
+                {autoSaveState === 'saving' ? '正在自动保存…' : autoSaveError || '自动保存失败'}
+              </Typography.Text>
+            </div>
+          )}
         </div>
       </Modal>
     </div>

@@ -63,6 +63,7 @@ export default function TerminalWidget(props: {
   return (
     <div
       className="monitor-widget"
+      data-monitor-widget-id={widget.id}
       style={{
         position: 'absolute',
         left: 0,

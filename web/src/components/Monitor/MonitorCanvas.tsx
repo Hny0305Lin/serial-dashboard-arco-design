@@ -8,6 +8,8 @@ import TerminalWidget from './TerminalWidget';
 import ClockWidget from './ClockWidget';
 import ForwardingWidget from './ForwardingWidget';
 import MonitorWidgetConfigModal from './MonitorWidgetConfigModal';
+import { getActiveWidgets } from './activeWidgets';
+import { locateWidgetDomById } from './locateWidget';
 import { useSerialPortController } from '../../hooks/useSerialPortController';
 import { pushForwardingMetrics } from '../../hooks/useForwardingMetrics';
 import { inferSerialReason } from '../../utils/serialReason';
@@ -991,6 +993,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const canvasStateRef = useRef(canvasState);
   const panRafRef = useRef<number | null>(null);
+  const panCancelRef = useRef<null | (() => void)>(null);
 
   useEffect(() => {
     canvasStateRef.current = canvasState;
@@ -1001,6 +1004,11 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
       window.cancelAnimationFrame(panRafRef.current);
       panRafRef.current = null;
     }
+    if (panCancelRef.current) {
+      const cancel = panCancelRef.current;
+      panCancelRef.current = null;
+      cancel();
+    }
   }, []);
 
   useEffect(() => {
@@ -1010,26 +1018,38 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   }, [isDragging, draggedWidgetId, resizingWidgetId, stopPan]);
 
   const animatePanTo = useCallback((toOffsetX: number, toOffsetY: number) => {
-    if (!canUseDom) return;
+    if (!canUseDom) return Promise.resolve(false);
     stopPan();
     const from = canvasStateRef.current;
     const start = performance.now();
     const duration = 260;
-    const step = (now: number) => {
-      const t = Math.min(1, (now - start) / duration);
-      const k = 1 - Math.pow(1 - t, 3);
-      setCanvasState(prev => ({
-        ...prev,
-        offsetX: from.offsetX + (toOffsetX - from.offsetX) * k,
-        offsetY: from.offsetY + (toOffsetY - from.offsetY) * k
-      }));
-      if (t < 1) {
-        panRafRef.current = window.requestAnimationFrame(step);
-      } else {
-        panRafRef.current = null;
-      }
-    };
-    panRafRef.current = window.requestAnimationFrame(step);
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        resolve(ok);
+      };
+      const cancel = () => finish(false);
+      panCancelRef.current = cancel;
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / duration);
+        const k = 1 - Math.pow(1 - t, 3);
+        setCanvasState(prev => ({
+          ...prev,
+          offsetX: from.offsetX + (toOffsetX - from.offsetX) * k,
+          offsetY: from.offsetY + (toOffsetY - from.offsetY) * k
+        }));
+        if (t < 1) {
+          panRafRef.current = window.requestAnimationFrame(step);
+        } else {
+          panRafRef.current = null;
+          if (panCancelRef.current === cancel) panCancelRef.current = null;
+          finish(true);
+        }
+      };
+      panRafRef.current = window.requestAnimationFrame(step);
+    });
   }, [canUseDom, stopPan]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -1060,6 +1080,20 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
   const updateWidget = useCallback((id: string, patch: Partial<MonitorWidget>) => {
     setWidgets(prev => prev.map(w => (w.id === id ? { ...w, ...patch } : w)));
   }, []);
+
+  useEffect(() => {
+    if (!canUseDom) return;
+    if (!(import.meta as any)?.env?.DEV) return;
+    (window as any).__monitorTest = {
+      setWidgetLastRxAt: (id: string, ts?: number) => {
+        const next = typeof ts === 'number' ? ts : Date.now();
+        updateWidget(id, { lastRxAt: next });
+      }
+    };
+    return () => {
+      if ((window as any).__monitorTest) delete (window as any).__monitorTest;
+    };
+  }, [canUseDom, updateWidget]);
 
   const handleAddWidget = (type: MonitorWidget['type']) => {
     let createdId: string | null = null;
@@ -1289,13 +1323,13 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
 
   const droplist = (
     <Menu>
-      <Menu.Item key='terminal' onClick={() => handleAddWidget('terminal')}>
+      <Menu.Item key='terminal' data-monitor-add-widget="terminal" onClick={() => handleAddWidget('terminal')}>
         <Space><IconCode /> {t('monitor.widget.terminal')}</Space>
       </Menu.Item>
-      <Menu.Item key='clock' onClick={() => handleAddWidget('clock')}>
+      <Menu.Item key='clock' data-monitor-add-widget="clock" onClick={() => handleAddWidget('clock')}>
         <Space><IconClockCircle /> {t('monitor.widget.clock')}</Space>
       </Menu.Item>
-      <Menu.Item key='forwarding' onClick={() => handleAddWidget('forwarding')}>
+      <Menu.Item key='forwarding' data-monitor-add-widget="forwarding" onClick={() => handleAddWidget('forwarding')}>
         <Space><IconSync /> {t('monitor.widget.forwarding')}</Space>
       </Menu.Item>
     </Menu>
@@ -1476,20 +1510,26 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
     return null;
   };
 
-  const focusWidget = useCallback((id: string) => {
+  const focusWidget = useCallback((id: string, opts?: { align?: 'center' | 'top'; topPaddingPx?: number; highlightAfter?: boolean }) => {
     const el = containerRef.current;
-    if (!el) return;
+    if (!el) return Promise.resolve(false);
     const w = widgets.find(x => x.id === id);
-    if (!w) return;
+    if (!w) return Promise.resolve(false);
     const scale = clampScale(canvasStateRef.current.scale || 1);
     const viewportW = el.clientWidth || 0;
     const viewportH = el.clientHeight || 0;
     const cx = w.x + w.width / 2;
     const cy = w.y + w.height / 2;
     const rawOffsetX = viewportW / 2 - cx * scale;
-    const rawOffsetY = viewportH / 2 - cy * scale;
+    const align = opts?.align || 'center';
+    const topPaddingPx = typeof opts?.topPaddingPx === 'number' ? opts.topPaddingPx : 20;
+    const rawOffsetY = align === 'top' ? (topPaddingPx - w.y * scale) : (viewportH / 2 - cy * scale);
     const clamped = clampOffsets(scale, rawOffsetX, rawOffsetY);
-    animatePanTo(clamped.offsetX, clamped.offsetY);
+    return animatePanTo(clamped.offsetX, clamped.offsetY).then((ok) => {
+      if (!ok) return ok;
+      if (!opts?.highlightAfter) return ok;
+      return locateWidgetDomById(id, { offsetTopPx: topPaddingPx, highlightDurationMs: 1500 }).then(() => ok);
+    });
   }, [animatePanTo, clampOffsets, widgets]);
 
   // 全局鼠标事件监听
@@ -1817,7 +1857,7 @@ export default function MonitorCanvas(props: { ws: WebSocket | null; wsConnected
                 />
               </Tooltip>
               <Dropdown droplist={droplist} position='br'>
-                <Button type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+                <Button aria-label="添加组件" type='primary' shape='circle' size='large' icon={<IconPlus />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
               </Dropdown>
             </Space>
           </div>
@@ -1932,16 +1972,61 @@ const FloatingActiveButton = React.memo(function FloatingActiveButton(props: {
   widgets: MonitorWidget[];
   floatingActivePos: { bottom: number; left: number } | null;
   zoomTo: (nextScale: number, originClientX: number, originClientY: number) => void;
-  focusWidget: (id: string) => void;
+  focusWidget: (id: string, opts?: { align?: 'center' | 'top'; topPaddingPx?: number; highlightAfter?: boolean }) => void | Promise<boolean>;
   getDefaultWidgetName: (type?: MonitorWidget['type']) => string;
   canUseDom: boolean;
 }) {
   const { widgets, floatingActivePos, zoomTo, focusWidget, getDefaultWidgetName, canUseDom } = props;
   const nowTs = Date.now();
   const activeWindowMs = 5000;
-  const activeWidgets = widgets
-    .filter(w => w.type === 'terminal' && !!w.lastRxAt && nowTs - (w.lastRxAt || 0) <= activeWindowMs)
-    .sort((a, b) => (b.lastRxAt || 0) - (a.lastRxAt || 0));
+  const activeWidgets = getActiveWidgets(widgets, nowTs, activeWindowMs);
+
+  const wrapperRef = React.useRef<HTMLDivElement | null>(null);
+  const [dockedToCenter, setDockedToCenter] = React.useState(false);
+  const [centerTranslate, setCenterTranslate] = React.useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const centerTranslateRef = React.useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const setCenterTranslateSafe = React.useCallback((next: { x: number; y: number }) => {
+    centerTranslateRef.current = next;
+    setCenterTranslate(next);
+  }, []);
+
+  const recomputeCenterTranslate = React.useCallback(
+    (opts?: { offsetYPx?: number }) => {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const offsetYPx = opts?.offsetYPx ?? 24;
+      const targetCenterX = window.innerWidth / 2;
+      const targetCenterY = window.innerHeight / 2 - offsetYPx;
+
+      const currentCenterX = rect.left + rect.width / 2;
+      const currentCenterY = rect.top + rect.height / 2;
+
+      const baseCenterX = currentCenterX - centerTranslateRef.current.x;
+      const baseCenterY = currentCenterY - centerTranslateRef.current.y;
+
+      setCenterTranslateSafe({
+        x: Math.round(targetCenterX - baseCenterX),
+        y: Math.round(targetCenterY - baseCenterY),
+      });
+    },
+    [setCenterTranslateSafe],
+  );
+
+  React.useEffect(() => {
+    if (!dockedToCenter) return;
+    let raf = 0;
+    const onResize = () => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => recomputeCenterTranslate());
+    };
+    window.addEventListener('resize', onResize, { passive: true });
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.cancelAnimationFrame(raf);
+    };
+  }, [dockedToCenter, recomputeCenterTranslate]);
 
   const activeDroplist = (
     <Menu>
@@ -1956,14 +2041,14 @@ const FloatingActiveButton = React.memo(function FloatingActiveButton(props: {
             onClick={() => {
               zoomTo(1, window.innerWidth / 2, window.innerHeight / 2);
               window.setTimeout(() => {
-                focusWidget(w.id);
+                focusWidget(w.id, { align: 'top', topPaddingPx: 20, highlightAfter: true });
               }, 260);
             }}
           >
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span>{(w.title || '').trim() || getDefaultWidgetName(w.type)}</span>
               <span style={{ fontSize: 12, opacity: 0.7 }}>
-                {(w.portPath || '').trim()} · {Math.max(0, Math.round((nowTs - (w.lastRxAt || 0)) / 1000))}s
+                {((w.portPath || '').trim() || '—')} · {Math.max(0, Math.round((nowTs - (w.lastRxAt || 0)) / 1000))}s
               </span>
             </div>
           </Menu.Item>
@@ -1974,16 +2059,36 @@ const FloatingActiveButton = React.memo(function FloatingActiveButton(props: {
 
   const node = (
     <div
+      ref={wrapperRef}
       style={{
         position: 'fixed',
         bottom: floatingActivePos?.bottom ?? 20,
         left: floatingActivePos?.left ?? 20,
         zIndex: FLOATING_PORTAL_Z_INDEX,
-        transition: 'bottom 180ms ease, left 180ms ease',
+        transform: `translate3d(${centerTranslate.x}px, ${centerTranslate.y}px, 0)`,
+        transition: 'bottom 180ms ease, left 180ms ease, transform 420ms ease-out',
+        willChange: dockedToCenter ? 'transform' : undefined,
       }}
     >
       <Dropdown droplist={activeDroplist} position="top" trigger="hover">
-        <Button shape='circle' size='large' icon={<IconUnorderedList />} style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }} />
+        <Button
+          aria-label="活跃组件"
+          aria-pressed={dockedToCenter}
+          shape="circle"
+          size="large"
+          icon={<IconUnorderedList />}
+          style={{ boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (dockedToCenter) {
+              setDockedToCenter(false);
+              setCenterTranslateSafe({ x: 0, y: 0 });
+              return;
+            }
+            setDockedToCenter(true);
+            recomputeCenterTranslate({ offsetYPx: 24 });
+          }}
+        />
       </Dropdown>
     </div>
   );

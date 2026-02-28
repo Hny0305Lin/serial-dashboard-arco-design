@@ -11,6 +11,7 @@ type ChannelPart = {
   dropped: number;
   avgLatencyMs: number | '';
   lastError: string;
+  lastSuccessAt: number;
 };
 
 let snapshot: unknown | null = null;
@@ -36,10 +37,11 @@ function digest(x: unknown | null) {
         dropped: Number(cc.dropped ?? 0),
         lastError: cc.lastError ? String(cc.lastError) : '',
         avgLatencyMs: typeof cc.avgLatencyMs === 'number' ? Math.round(cc.avgLatencyMs) : '',
+        lastSuccessAt: typeof cc.lastSuccessAt === 'number' ? Math.floor(cc.lastSuccessAt) : 0,
       };
     })
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map((c) => `${c.id}|${c.enabled}|${c.queueLength}|${c.sent}|${c.failed}|${c.dropped}|${c.avgLatencyMs}|${c.lastError}`);
+    .map((c) => `${c.id}|${c.enabled}|${c.queueLength}|${c.sent}|${c.failed}|${c.dropped}|${c.avgLatencyMs}|${c.lastError}|${c.lastSuccessAt}`);
   return `${enabled}::${parts.join(';;')}`;
 }
 

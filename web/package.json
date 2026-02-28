@@ -9,7 +9,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "pnpm run test:unit && pnpm run test:e2e",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +38,10 @@
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "@types/react-router-dom": "^5.3.3",
-    "less": "^4.5.1"
+    "@playwright/test": "^1.50.0",
+    "jsdom": "^26.1.0",
+    "less": "^4.5.1",
+    "vitest": "^3.2.4"
   },
   "pnpm": {
     "overrides": {

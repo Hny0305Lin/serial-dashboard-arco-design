@@ -125,6 +125,7 @@ export default function ClockWidget(props: {
   return (
     <div
       className="monitor-widget"
+      data-monitor-widget-id={widget.id}
       style={{
         position: 'absolute',
         left: 0,
