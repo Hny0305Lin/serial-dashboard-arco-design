@@ -18,24 +18,33 @@
 
 ## 目录
 
-- [功能概览](#功能概览)
+- [简介](#简介)
+- [功能特性](#功能特性)
 - [技术栈](#技术栈)
+- [系统要求](#系统要求)
+- [安装步骤](#安装步骤)
 - [快速开始](#快速开始)
+- [使用示例](#使用示例)
 - [开发命令](#开发命令)
 - [配置](#配置)
+- [目录结构](#目录结构)
 - [登录与访问控制（TOTP + 公共访问链接）](#登录与访问控制totp--公共访问链接)
 - [HTTP API](#http-api)
 - [WebSocket](#websocket)
 - [数据目录与隐私](#数据目录与隐私)
 - [监控页 Astro Islands 改造](#监控页-astro-islands-改造)
+- [构建与部署](#构建与部署)
+- [测试命令](#测试命令)
+- [文档自检](#文档自检)
 - [排障](#排障)
 - [Roadmap](#roadmap)
 - [FAQ](#faq)
 - [变更记录](#变更记录)
-- [贡献](#贡献)
-- [License](#license)
+- [贡献指南](#贡献指南)
+- [致谢](#致谢)
+- [许可证（License）](#许可证license)
 
-## 功能概览
+## 功能特性
 
 - 设备列表：枚举串口、打开/关闭、状态展示（List/Grid 视图）
 - 终端日志：TX/RX/System 等分色、标签对齐、长标签抗挤压
@@ -47,6 +56,36 @@
 - Backend：Node.js + TypeScript + Express + ws + serialport
 - Frontend：Astro + React 18 + Arco Design
 - Package Manager：pnpm（本项目默认不使用 npm）
+- Backend Dependencies（runtime）：
+  - `express@^5.2.1`
+  - `ws@^8.19.0`
+  - `serialport@^13.0.0`
+  - `mqtt@^5.14.1`
+  - `cors@^2.8.6`
+  - `dotenv@^17.3.1`
+- Backend DevDependencies：
+  - `typescript@^5.9.3`
+  - `ts-node@^10.9.2`
+  - `nodemon@^3.1.13`
+  - `eslint@^10.0.1`
+  - `prettier@^3.8.1`
+  - `@types/*`
+
+## 系统要求
+
+- Node.js：建议使用当前 LTS
+- pnpm：用于安装与运行脚本
+- 操作系统：Windows / Linux / macOS
+- 串口依赖说明：`serialport` 安装时会尝试获取预编译产物；若失败，需按平台准备本机编译工具链
+
+## 安装步骤
+
+在仓库根目录执行：
+
+```bash
+$ pnpm i
+$ pnpm -C web i
+```
 
 ## 快速开始
 
@@ -55,17 +94,10 @@
 - Node.js（建议使用当前 LTS）
 - pnpm
 
-### 安装
-
-```bash
-pnpm i
-pnpm -C web i
-```
-
 ### 一键联调启动（推荐）
 
 ```bash
-pnpm run dev:all
+$ pnpm run dev:all
 ```
 
 - 前端：<http://localhost:9000>
@@ -73,6 +105,32 @@ pnpm run dev:all
 - WebSocket：`ws://localhost:9001/ws`
 
 说明：前端开发态已把 `/api` 与 `/ws` 代理到后端 `9001`，所以前端页面里直接请求 `/api/*` 与 `/ws` 即可。
+
+## 使用示例
+
+以下示例以默认开发端口为准（后端 `9001`）。
+
+### 通过 HTTP 列出串口
+
+```bash
+$ curl -s http://localhost:9001/api/ports
+```
+
+### 打开串口（示例 COM5）
+
+```bash
+$ curl -s -X POST http://localhost:9001/api/ports/open \
+  -H "Content-Type: application/json" \
+  -d '{"path":"COM5","baudRate":115200}'
+```
+
+### 通过 HTTP 写入数据（hex）
+
+```bash
+$ curl -s -X POST http://localhost:9001/api/ports/write \
+  -H "Content-Type: application/json" \
+  -d '{"path":"COM5","data":"AA55FF01","encoding":"hex"}'
+```
 
 ## 开发命令
 
@@ -85,6 +143,10 @@ pnpm run dev:all
 | `pnpm run start` | 运行后端产物 | `node dist/index.js`（更接近生产） |
 | `pnpm run test` | 跑测试 | 先 build，再用 `node --test` 跑 `dist/test` |
 | `pnpm run perf:forwarding` | 转发链路压测 | 先 build，再跑 `dist/perf/forwarding-perf.js` |
+| `pnpm run perf:mixed-encoding` | 混合编码压测 | 先 build，再跑 `dist/perf/mixed-encoding-perf.js` |
+| `pnpm run perf:mixed-encoding:sample` | 混合编码样本分析 | 先 build，再跑 `dist/perf/mixed-encoding-analyze-sample.js` |
+| `pnpm run clean:serial-logs` | 清理串口日志落盘 | 先 build，再跑 `dist/tools/cleanSerialLogs.js` |
+| `pnpm run diag:com` | 诊断 COM 串口可用性 | 先 build，再跑 `dist/tools/diagnoseComPort.js` |
 
 ## 配置
 
@@ -96,6 +158,19 @@ pnpm run dev:all
 Forwarding 配置文件：
 
 - `{DATA_DIR}/forwarding.config.json`
+
+## 目录结构
+
+```text
+.
+├─ src/                 后端 TypeScript 源码
+├─ web/                 前端 Astro + React
+├─ docs/                设计/排障/使用文档
+├─ scripts/             开发编排与互斥锁相关脚本
+├─ data/                运行时数据目录（默认，建议加入 .gitignore）
+├─ README.md
+└─ LICENSE
+```
 
 ## 登录与访问控制（TOTP + 公共访问链接）
 
@@ -539,6 +614,42 @@ Endpoint（开发默认）：`ws://localhost:9001/ws`
 - [docs/monitor-astro-islands.md](docs/monitor-astro-islands.md)
 - [docs/monitor-astro-islands.tasks.md](docs/monitor-astro-islands.tasks.md)
 
+## 构建与部署
+
+### 后端构建与运行
+
+```bash
+$ pnpm run build
+$ pnpm run start
+```
+
+### 前端构建与预览
+
+```bash
+$ pnpm -C web build
+$ pnpm -C web preview
+```
+
+更多部署细节（转发/数据目录/落盘策略等）参考：
+
+- [docs/deploy-forwarding.md](docs/deploy-forwarding.md)
+
+## 测试命令
+
+```bash
+$ pnpm run test
+```
+
+说明：`web/package.json` 的 `test` 脚本目前为占位（会直接退出 1），因此未纳入默认测试链路。
+
+## 文档自检
+
+在完成依赖安装后，执行以下命令进行文档与示例自检：
+
+```bash
+$ node scripts/check-docs.mjs
+```
+
 ## 排障
 
 ### 端口打不开 / 被占用
@@ -604,14 +715,22 @@ Endpoint（开发默认）：`ws://localhost:9001/ws`
 - 设置防抖：修复自动发送配置页的无限保存循环，仅在真正变更时触发保存
 - 状态同步：修复端口关闭后状态未及时同步，增加后端监听器强制清理
 
-## 贡献
+## 贡献指南
 
 欢迎 PR / Issue：
 
 - Bug 复现步骤尽量包含：系统版本、Node 版本、串口设备型号、日志片段（注意脱敏）
 - 新增依赖前请先说明收益、替代方案与风险
 
-## License
+- 优先提交小步 PR：保证可回滚、可定位
+- 提交信息建议包含：动机、影响面、验证方式
+- 涉及串口/转发链路的改动：请在 PR 描述中说明压测或稳定性验证路径
+
+## 致谢
+
+- 致谢：Arco Design、Astro、React、Express、serialport 及相关社区
+
+## 许可证（License）
 
 [Haohanyh Computer Software Products Open Source LICENSE](https://github.com/Hny0305Lin/LICENSE/blob/main/LICENSE)
 
