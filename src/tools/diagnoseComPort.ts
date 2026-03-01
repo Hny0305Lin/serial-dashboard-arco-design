@@ -286,8 +286,8 @@ async function monitorWs(serverWsUrl: string, targetPath: string, durationMs: nu
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
   const target = String(args.port || 'COM6');
-  const serverBase = String(args.server || 'http://127.0.0.1:9001');
-  const wsUrl = String(args.ws || 'ws://127.0.0.1:9001/ws');
+  const serverBase = String(args.server || 'http://127.0.0.1:9011');
+  const wsUrl = String(args.ws || 'ws://127.0.0.1:9011/ws');
   const durationMs = Number(args.durationMs || 10_000);
   const baudRate = Number(args.baudRate || 115200);
   const probeExclusive = args['probe-exclusive'] === true || String(args['probe-exclusive'] || '').trim() === '1';
@@ -331,4 +331,3 @@ main().catch((e) => {
   process.stderr.write(String(e?.stack || e) + '\n');
   process.exitCode = 1;
 });
-

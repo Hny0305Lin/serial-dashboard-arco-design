@@ -98,26 +98,26 @@ $ pnpm -C web i
 $ pnpm run dev:all
 ```
 
-- 前端：<http://localhost:9000>
-- 后端：<http://localhost:9001>
-- WebSocket：`ws://localhost:9001/ws`
+- 前端：<http://localhost:9010>
+- 后端：<http://localhost:9011>
+- WebSocket：`ws://localhost:9011/ws`
 
-说明：前端开发态已把 `/api` 与 `/ws` 代理到后端 `9001`，所以前端页面里直接请求 `/api/*` 与 `/ws` 即可。
+说明：前端开发态已把 `/api` 与 `/ws` 代理到后端 `9011`，所以前端页面里直接请求 `/api/*` 与 `/ws` 即可。
 
 ## 使用示例
 
-以下示例以默认开发端口为准（后端 `9001`）。
+以下示例以默认开发端口为准（后端 `9011`）。
 
 ### 通过 HTTP 列出串口
 
 ```bash
-$ curl -s http://localhost:9001/api/ports
+$ curl -s http://localhost:9011/api/ports
 ```
 
 ### 打开串口（示例 COM5）
 
 ```bash
-$ curl -s -X POST http://localhost:9001/api/ports/open \
+$ curl -s -X POST http://localhost:9011/api/ports/open \
   -H "Content-Type: application/json" \
   -d '{"path":"COM5","baudRate":115200}'
 ```
@@ -125,7 +125,7 @@ $ curl -s -X POST http://localhost:9001/api/ports/open \
 ### 通过 HTTP 写入数据（hex）
 
 ```bash
-$ curl -s -X POST http://localhost:9001/api/ports/write \
+$ curl -s -X POST http://localhost:9011/api/ports/write \
   -H "Content-Type: application/json" \
   -d '{"path":"COM5","data":"AA55FF01","encoding":"hex"}'
 ```
@@ -152,7 +152,7 @@ $ curl -s -X POST http://localhost:9001/api/ports/write \
 
 后端入口会读取以下环境变量：
 
-- `PORT`：HTTP 端口（默认 `9001`）
+- `PORT`：HTTP 端口（默认 `9011`）
 - `DATA_DIR`：数据目录（默认 `{projectRoot}/data`）
 
 Forwarding 配置文件：
@@ -305,7 +305,7 @@ WebSocket(`/ws`)：
 
 ## HTTP API
 
-Base URL（开发默认）：`http://localhost:9001/api`
+Base URL（开发默认）：`http://localhost:9011/api`
 
 ### 通用响应格式
 
@@ -521,7 +521,7 @@ Base URL（开发默认）：`http://localhost:9001/api`
 
 ## WebSocket
 
-Endpoint（开发默认）：`ws://localhost:9001/ws`
+Endpoint（开发默认）：`ws://localhost:9011/ws`
 
 ### 消息格式
 
@@ -676,7 +676,7 @@ $ node scripts/check-docs.mjs --skip-external
 ### 前端请求 `/api` 404
 
 - 确认你是通过 `pnpm -C web dev` / `pnpm dev:all` 启动的前端开发服务器
-- 开发代理已配置为把 `/api` 与 `/ws` 指向后端 `9001`
+- 开发代理已配置为把 `/api` 与 `/ws` 指向后端 `9011`
 
 ### Linux/macOS 下无权限访问串口
 
@@ -699,7 +699,7 @@ $ node scripts/check-docs.mjs --skip-external
 
 ### 前端要怎么连后端？
 
-开发态建议使用 `pnpm run dev:all`。前端开发服务器会把 `/api` 与 `/ws` 代理到后端 `9001`，页面里直接请求 `/api/*` 即可。
+开发态建议使用 `pnpm run dev:all`。前端开发服务器会把 `/api` 与 `/ws` 代理到后端 `9011`，页面里直接请求 `/api/*` 即可。
 
 ### 数据目录里的文件安全吗？可以提交到仓库吗？
 

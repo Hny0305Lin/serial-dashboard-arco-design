@@ -13,7 +13,7 @@ import { AppSettingsStore } from './storage/AppSettingsStore';
 const PORT = (() => {
   const n = Number(String(process.env.PORT || '').trim());
   if (Number.isFinite(n) && n > 0) return n;
-  return 9001;
+  return 9011;
 })();
 
 async function main() {

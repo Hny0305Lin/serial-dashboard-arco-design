@@ -8,7 +8,7 @@
 
 把当前 `#/monitor` 的“单棵 React 大组件树（MonitorCanvas + Widgets）”改造为：
 
-- 监控页成为一个真正的 Astro 页面路由（推荐 `http://localhost:9000/monitor`）
+- 监控页成为一个真正的 Astro 页面路由（推荐 `http://localhost:9010/monitor`）
 - 页面由 Astro 负责布局与组件组织（.astro 文件数量显著增加）
 - “核心大地图/画布（平移/缩放/网格/背景等）”保留为 React Island
 - 小组件（Terminal/Clock/Forwarding 等）改造成 Astro 组件外壳 + 独立 islands（React 或 vanilla），并通过共享桥接层协同
@@ -92,8 +92,8 @@ Astro `.astro` 组件是编译期产物，运行时不会像 React 组件那样�
 
 目标 URL：
 
-- 新：`http://localhost:9000/monitor`
-- 旧：`http://localhost:9000/#/monitor` 需要重定向到 `/monitor`（见迁移步骤）
+- 新：`http://localhost:9010/monitor`
+- 旧：`http://localhost:9010/#/monitor` 需要重定向到 `/monitor`（见迁移步骤）
 
 ### 4.2 页面结构（建议）
 
@@ -169,7 +169,7 @@ Astro `.astro` 组件是编译期产物，运行时不会像 React 组件那样�
 
 验收：
 
-- `http://localhost:9000/monitor` 可打开，样式正常
+- `http://localhost:9010/monitor` 可打开，样式正常
 
 ### Step 2：旧 `#/monitor` 重定向到新 `/monitor`
 

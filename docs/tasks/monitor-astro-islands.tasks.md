@@ -19,7 +19,7 @@
 
 ### 0.2 改造目标（To-Be）
 
-- 新增 Astro 页面路由：`/monitor`（推荐 `http://localhost:9000/monitor`）
+- 新增 Astro 页面路由：`/monitor`（推荐 `http://localhost:9010/monitor`）
 - 保留“核心大地图/画布”为 React Island（可继续使用 Arco）
 - 小组件迁移为：Astro 外壳（Shell）+ 独立 islands（React 或 vanilla）
 - 引入跨 islands 的共享层：`MonitorBridge`（单 WS owner + 状态总线）
@@ -66,7 +66,7 @@
 - 页面内先放一个最小容器（例如 `div#monitor-root`）与标题/占位提示。
 
 **验收**
-- `http://localhost:9000/monitor` 能打开，HTTP 200，且有基本内容。
+- `http://localhost:9010/monitor` 能打开，HTTP 200，且有基本内容。
 
 ### T1.2 确保 Arco 样式在 `/monitor` 生效
 
@@ -91,8 +91,8 @@
 - 注意：避免在新页面 `/monitor` 再把用户跳回 `/#/monitor`，防止循环。
 
 **验收**
-- 访问 `http://localhost:9000/#/monitor` 会稳定跳转到 `http://localhost:9000/monitor`。
-- 访问 `http://localhost:9000/#/` 等其它路由不受影响。
+- 访问 `http://localhost:9010/#/monitor` 会稳定跳转到 `http://localhost:9010/monitor`。
+- 访问 `http://localhost:9010/#/` 等其它路由不受影响。
 
 ---
 
@@ -315,4 +315,3 @@
 - 新组件组织：`web/src/components/Monitor/widgets/*.astro`（Shell 明显增多）
 - React islands：`MonitorMapIsland` + 各 WidgetIsland（数量增加但体积可控）
 - README/文档：迁移说明 + tasks.md + 验收清单完整
-

@@ -2,7 +2,7 @@
 
 ## 结论摘要
 
-- dev:all 旧实现没有“单实例锁”，允许重复启动；一旦并发启动或残留进程存在，固定端口（前端 9000、后端 9001）会出现 EADDRINUSE。
+- dev:all 旧实现没有“单实例锁”，允许重复启动；一旦并发启动或残留进程存在，固定端口（前端 9010、后端 9011）会出现 EADDRINUSE。
 - dev:all 旧实现的 shutdown 只对 pnpm 进程执行 kill，无法保证把其子进程树（nodemon/ts-node/astro dev）一并清理，容易留下“孤儿监听进程”，导致后续 dev:all 必然冲突。
 - 当前仓库未发现 docker-compose、PM2 ecosystem、CI 工作流会隐式启动 dev:all；冲突主要来自本地重复启动与残留进程。
 
@@ -17,8 +17,8 @@ Get-CimInstance Win32_Process |
   Select-Object ProcessId,Name,CreationDate,CommandLine |
   Format-List
 
-# 查看 9000/9001 监听情况（端口 -> PID）
-netstat -ano | Select-String -Pattern ':9000\s',':9001\s' | ForEach-Object { $_.Line }
+# 查看 9010/9011 监听情况（端口 -> PID）
+netstat -ano | Select-String -Pattern ':9010\s',':9011\s' | ForEach-Object { $_.Line }
 ```
 
 如果看到 LISTENING 的 PID，再用以下命令定位占用者：
@@ -34,9 +34,9 @@ Get-CimInstance Win32_Process -Filter "ProcessId=$pid" |
 
 | 场景 | 命令 | 工作目录 | 监听端口 | 关键环境变量 |
 |---|---|---|---|---|
-| 后端 dev | `pnpm dev` | repo root | `PORT`（默认 9001） | `PORT`、`DATA_DIR` |
-| 前端 dev | `pnpm -C web dev` | `web/` | 9000（现已支持 `WEB_PORT`） | `WEB_PORT`、`BACKEND_PORT`、`PUBLIC_BACKEND_PORT` |
-| 聚合 dev:all | `pnpm dev:all` | repo root | 前端 9000 + 后端 9001 | `DEVALL_LOCK_PATH`、`DEVALL_PORT_MODE`、`BACKEND_PORT`、`WEB_PORT` |
+| 后端 dev | `pnpm dev` | repo root | `PORT`（默认 9011） | `PORT`、`DATA_DIR` |
+| 前端 dev | `pnpm -C web dev` | `web/` | 9010（现已支持 `WEB_PORT`） | `WEB_PORT`、`BACKEND_PORT`、`PUBLIC_BACKEND_PORT` |
+| 聚合 dev:all | `pnpm dev:all` | repo root | 前端 9010 + 后端 9011 | `DEVALL_LOCK_PATH`、`DEVALL_PORT_MODE`、`BACKEND_PORT`、`WEB_PORT` |
 
 ## 根因链路拆解
 
@@ -44,7 +44,7 @@ Get-CimInstance Win32_Process -Filter "ProcessId=$pid" |
 
 - 同一台机器上手动/脚本并发执行两次 `pnpm dev:all`
 - 两个 dev:all 实例各自启动一套 `pnpm dev`（后端）与 `pnpm -C web dev`（前端）
-- 因前后端端口固定，先启动的一套占用 9000/9001，后启动的一套在绑定端口时触发冲突
+- 因前后端端口固定，先启动的一套占用 9010/9011，后启动的一套在绑定端口时触发冲突
 
 ### 2) 残留监听链（更隐蔽、更常见）
 
@@ -60,4 +60,3 @@ Get-CimInstance Win32_Process -Filter "ProcessId=$pid" |
 - dev:all shutdown 改为杀进程树（Windows 使用 taskkill /T /F）
 - 后端增加 server.lock.json 单实例锁：避免绕过 dev:all 直接启动多个后端实例
 - 后端对 EADDRINUSE 做显式处理并返回 110，同时提供 `/health` 探针便于自动化验证
-

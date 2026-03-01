@@ -4,13 +4,13 @@ import react from '@astrojs/react';
 const backendPort = (() => {
   const n = Number(String(process.env.BACKEND_PORT || process.env.PUBLIC_BACKEND_PORT || '').trim());
   if (Number.isFinite(n) && n > 0) return n;
-  return 9001;
+  return 9011;
 })();
 
 const webPort = (() => {
   const n = Number(String(process.env.WEB_PORT || '').trim());
   if (Number.isFinite(n) && n > 0) return n;
-  return 9000;
+  return 9010;
 })();
 
 export default defineConfig({

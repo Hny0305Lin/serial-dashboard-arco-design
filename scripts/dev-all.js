@@ -85,8 +85,8 @@ async function main() {
   }
 
   const portMode = String(process.env.DEVALL_PORT_MODE || 'strict').trim();
-  const requestedBackendPort = normalizePort(process.env.BACKEND_PORT || process.env.PORT, 9001);
-  const requestedWebPort = normalizePort(process.env.WEB_PORT, 9000);
+  const requestedBackendPort = normalizePort(process.env.BACKEND_PORT || process.env.PORT, 9011);
+  const requestedWebPort = normalizePort(process.env.WEB_PORT, 9010);
 
   let backendPort = requestedBackendPort;
   let webPort = requestedWebPort;

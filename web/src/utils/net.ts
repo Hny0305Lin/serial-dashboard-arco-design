@@ -2,7 +2,7 @@ export function getBackendPort(): number {
   const v = String((import.meta as any)?.env?.PUBLIC_BACKEND_PORT || (import.meta as any)?.env?.VITE_BACKEND_PORT || '').trim();
   const n = Number(v);
   if (Number.isFinite(n) && n > 0) return n;
-  return 9001;
+  return 9011;
 }
 
 export function getApiBaseUrl(): string {

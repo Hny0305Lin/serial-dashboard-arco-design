@@ -13,8 +13,8 @@ pnpm dev:all
 
 默认端口：
 
-- 前端 Astro dev：9000
-- 后端 HTTP/WS：9001
+- 前端 Astro dev：9010
+- 后端 HTTP/WS：9011
 
 ## 监控与定位（Windows）
 
@@ -26,7 +26,7 @@ Get-CimInstance Win32_Process |
   Format-Table -Auto
 
 # 端口定位（端口 -> PID）
-netstat -ano | Select-String -Pattern ':9000\s',':9001\s' | ForEach-Object { $_.Line }
+netstat -ano | Select-String -Pattern ':9010\s',':9011\s' | ForEach-Object { $_.Line }
 ```
 
 ## 冲突清理（Windows）
@@ -40,7 +40,7 @@ taskkill /F /T /PID <PID>
 清理后再次确认端口释放：
 
 ```powershell
-netstat -ano | Select-String -Pattern ':9000\s',':9001\s' | ForEach-Object { $_.Line }
+netstat -ano | Select-String -Pattern ':9010\s',':9011\s' | ForEach-Object { $_.Line }
 ```
 
 ## dev:all 行为变更点
@@ -55,8 +55,8 @@ netstat -ano | Select-String -Pattern ':9000\s',':9001\s' | ForEach-Object { $_.
 
 | 变量 | 默认值 | 含义 |
 |---|---:|---|
-| `BACKEND_PORT` | 9001 | 后端监听端口（同时作为前端代理目标） |
-| `WEB_PORT` | 9000 | 前端 dev server 端口 |
+| `BACKEND_PORT` | 9011 | 后端监听端口（同时作为前端代理目标） |
+| `WEB_PORT` | 9010 | 前端 dev server 端口 |
 | `DEVALL_PORT_MODE` | `strict` | `strict` 或 `increment` |
 | `DEVALL_LOCK_PATH` | (tmp) | dev:all 锁文件路径（用于调试/测试隔离） |
 | `DATA_DIR` | `./data` | 后端运行时数据目录（同时落 server.lock.json） |
@@ -81,4 +81,3 @@ pnpm dev:all
 - 回滚 dev:all 的防护：恢复 scripts/dev-all.js 到旧版本即可
 - 回滚前端端口/代理动态化：恢复 web/astro.config.mjs 的固定端口与固定代理目标
 - 回滚后端单实例锁：移除 src/index.ts 的 server.lock.json 相关逻辑与 src/core/instanceLock.ts
-
