@@ -13,6 +13,7 @@
     "build:prod": "pnpm run build && pnpm -C web build",
     "start": "node dist/index.js",
     "start:prod": "node dist/index.js",
+    "start:bt": "NODE_ENV=production PORT=${PORT:-9011} node dist/index.js",
     "test": "pnpm run build && node --test dist/test/**/*.test.js",
     "perf:forwarding": "pnpm run build && node dist/perf/forwarding-perf.js",
     "perf:mixed-encoding": "pnpm run build && node dist/perf/mixed-encoding-perf.js",
