@@ -1,4 +1,4 @@
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, spawnSync } = require('child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -260,6 +260,21 @@ function run(name, command, args, extraEnv) {
   return child;
 }
 
+function runSync(name, command, args, extraEnv) {
+  const out = spawnSync(command, args, {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+    env: { ...process.env, ...(extraEnv || {}) },
+  });
+  if (out.error) {
+    throw out.error;
+  }
+  if (typeof out.status === 'number' && out.status !== 0) {
+    throw new Error(`[dev:all] ${name} failed with code ${out.status}`);
+  }
+  return out;
+}
+
 function pathExists(p) {
   try {
     fs.accessSync(p);
@@ -274,17 +289,20 @@ function getBinPath(projectDir, binName) {
   return path.join(projectDir, 'node_modules', '.bin', `${binName}${ext}`);
 }
 
-function ensureDepsInstalled(pnpm) {
+function ensureDepsInstalled(pnpm, opts) {
   const rootDir = path.resolve(__dirname, '..');
   const webDir = path.join(rootDir, 'web');
+  const backendMode = String(opts?.backendMode || 'dev').trim();
 
   const missingDirs = [];
   if (!pathExists(path.join(rootDir, 'node_modules'))) missingDirs.push('node_modules（后端）');
   if (!pathExists(path.join(webDir, 'node_modules'))) missingDirs.push('web/node_modules（前端）');
 
   const missingBins = [];
-  if (!pathExists(getBinPath(rootDir, 'nodemon'))) missingBins.push('nodemon（后端 dev 依赖）');
-  if (!pathExists(getBinPath(rootDir, 'ts-node'))) missingBins.push('ts-node（后端 dev 依赖）');
+  if (backendMode !== 'prod') {
+    if (!pathExists(getBinPath(rootDir, 'nodemon'))) missingBins.push('nodemon（后端 dev 依赖）');
+    if (!pathExists(getBinPath(rootDir, 'ts-node'))) missingBins.push('ts-node（后端 dev 依赖）');
+  }
   if (!pathExists(getBinPath(webDir, 'astro'))) missingBins.push('astro（前端 dev 依赖）');
 
   if (!missingDirs.length && !missingBins.length) return true;
@@ -298,6 +316,22 @@ function ensureDepsInstalled(pnpm) {
   hints.push(`[dev:all]   2) 在 web/ 目录执行：${[pnpm.command, ...pnpm.args, '-C', 'web', 'install'].join(' ')}`);
   console.error(hints.join(os.EOL));
   return false;
+}
+
+function getNodeInvoker(config) {
+  const nodePath = (typeof config?.nodePath === 'string' && config.nodePath.trim()) ? config.nodePath.trim() : '';
+  if (nodePath) return { command: nodePath, args: [] };
+  return { command: 'node', args: [] };
+}
+
+function ensureBackendBuild(pnpm) {
+  const rootDir = path.resolve(__dirname, '..');
+  const distEntry = path.join(rootDir, 'dist', 'index.js');
+  if (pathExists(distEntry)) return;
+  runSync('backend:build', pnpm.command, [...pnpm.args, 'run', 'build']);
+  if (!pathExists(distEntry)) {
+    throw new Error(`[dev:all] backend build finished but dist entry not found: ${distEntry}`);
+  }
 }
 
 async function main() {
@@ -318,9 +352,14 @@ async function main() {
   if (!String(process.env.npm_config_registry || '').trim()) process.env.npm_config_registry = DEFAULT_REGISTRY;
 
   const pnpm = getPnpmInvoker(config);
-  if (!ensureDepsInstalled(pnpm)) {
+  const backendMode = String(process.env.DEVALL_BACKEND_MODE || 'dev').trim();
+  if (!ensureDepsInstalled(pnpm, { backendMode })) {
     lock.release();
     process.exit(1);
+  }
+
+  if (backendMode === 'prod') {
+    ensureBackendBuild(pnpm);
   }
 
   const portMode = String(process.env.DEVALL_PORT_MODE || 'strict').trim();
@@ -378,10 +417,20 @@ async function main() {
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
 
-  backend = run('backend', pnpm.command, [...pnpm.args, 'run', 'dev'], {
-    PORT: String(backendPort),
-    BACKEND_PORT: String(backendPort),
-  });
+  if (backendMode === 'prod') {
+    const node = getNodeInvoker(config);
+    const backendEnv = {
+      PORT: String(backendPort),
+      BACKEND_PORT: String(backendPort),
+      ...(String(process.env.NODE_ENV || '').trim() ? {} : { NODE_ENV: 'production' }),
+    };
+    backend = run('backend', node.command, [...node.args, path.join('dist', 'index.js')], backendEnv);
+  } else {
+    backend = run('backend', pnpm.command, [...pnpm.args, 'run', 'dev'], {
+      PORT: String(backendPort),
+      BACKEND_PORT: String(backendPort),
+    });
+  }
 
   web = run(
     'web',
