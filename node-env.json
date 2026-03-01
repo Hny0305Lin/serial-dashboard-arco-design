@@ -1,0 +1,12 @@
+{
+  "__comment": "这是 dev:all 的运行时环境配置模板（JSON 不支持真正的注释，所以用 __comment 字段承载说明）。\n适用于宝塔面板 Node.js 版本管理器：切换 Node 版本后，只需更新本文件，无需改代码。\n如何获取路径：宝塔面板 -> 软件商店 -> Node.js 版本管理器 -> 已安装版本，复制对应版本的 bin 目录下的可执行文件路径。\n示例：/www/server/nodejs/v22.21.1/bin/node  /www/server/nodejs/v22.21.1/bin/pnpm  /www/server/nodejs/v22.21.1/bin/npm\n建议把 envPath 配成 bin 目录，例如：/www/server/nodejs/v22.21.1/bin",
+  "registry": "https://registry.npmmirror.com/",
+  "nodePath": "",
+  "pnpmPath": "",
+  "npmPath": "",
+  "envPath": "",
+  "NODE_HOME": "",
+  "PNPM_HOME": "",
+  "NPM_CONFIG_CACHE": "",
+  "NPM_CONFIG_INIT_MODULE": ""
+}

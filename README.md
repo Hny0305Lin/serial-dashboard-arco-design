@@ -85,6 +85,22 @@ $ pnpm i
 $ pnpm -C web i
 ```
 
+## 宝塔面板 / 自定义 Node 环境（node-env.json）
+
+如果你在 Linux（尤其是宝塔面板 Node.js 版本管理器）环境中运行，可能出现 node/pnpm 不在系统 PATH、或切换版本后路径变化的问题。为避免依赖全局环境，本项目支持在启动时读取项目根目录的 `node-env.json` 来注入运行环境，并优先使用其中配置的 `pnpm`。
+
+- 配置文件：`node-env.json`（仓库根目录已提供模板）
+- 常用字段：
+  - `nodePath`：node 可执行文件绝对路径
+  - `pnpmPath`：pnpm 可执行文件绝对路径
+  - `npmPath`：npm 可执行文件绝对路径（可选）
+  - `envPath`：需要追加到 `PATH` 的目录（通常填 node/pnpm 所在的 bin 目录）
+  - `registry`：固定 registry（默认 `https://registry.npmmirror.com/`）
+  - `NPM_CONFIG_CACHE`、`NPM_CONFIG_INIT_MODULE`：可选，用于避免依赖全局 `.npmrc`
+- 运行时行为：
+  - 若路径填写错误或不可执行，启动会直接报中文错误并提示修正 `node-env.json`
+  - 若不需要该能力（本机已正确配置 PATH），保持字段为空即可
+
 ## 快速开始
 
 ### 依赖
