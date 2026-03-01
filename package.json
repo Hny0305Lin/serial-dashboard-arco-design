@@ -4,7 +4,7 @@
   "description": "A web-based serial port commander and dashboard with real-time monitoring and control.",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --exec ts-node src/index.ts",
+    "dev": "nodemon --watch src --ext ts,json --exec ts-node src/index.ts",
     "dev:web": "pnpm -C web dev",
     "dev:all": "node scripts/dev-all.js",
     "check:ports": "node scripts/check-ports.js",
