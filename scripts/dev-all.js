@@ -55,6 +55,41 @@ function isExecutable(filePath) {
   }
 }
 
+function ensureDir(dirPath) {
+  const p = String(dirPath || '').trim();
+  if (!p) return;
+  try {
+    if (fs.existsSync(p)) {
+      const st = fs.statSync(p);
+      if (!st.isDirectory()) throw new Error('不是目录');
+      return;
+    }
+    fs.mkdirSync(p, { recursive: true });
+  } catch (e) {
+    throw new Error(`node-env.json 配置错误：目录不可用：${p}（${String(e?.message || e)}）`);
+  }
+}
+
+function normalizeRegistry(registry, configPath) {
+  const v = String(registry || '').trim();
+  if (!v) return DEFAULT_REGISTRY;
+  if (v.includes('`')) {
+    throw new Error(
+      `node-env.json 配置错误：registry 里包含反引号 \`，请只填写纯 URL。\n` +
+      `示例：https://registry.npmmirror.com/\n` +
+      `文件：${configPath}`,
+    );
+  }
+  if (!/^https?:\/\//i.test(v)) {
+    throw new Error(
+      `node-env.json 配置错误：registry 必须以 http:// 或 https:// 开头：${v}\n` +
+      `示例：https://registry.npmmirror.com/\n` +
+      `文件：${configPath}`,
+    );
+  }
+  return v;
+}
+
 function applyEnvPath(extraPath) {
   const v = String(extraPath || '').trim();
   if (!v) return;
@@ -102,12 +137,23 @@ function loadNodeEnvConfig() {
 function applyNodeEnv(config, configPath) {
   if (!config) return;
   if (typeof config.envPath === 'string' && config.envPath.trim()) applyEnvPath(config.envPath);
-  if (typeof config.registry === 'string' && config.registry.trim()) process.env.npm_config_registry = config.registry.trim();
-  else process.env.npm_config_registry = DEFAULT_REGISTRY;
+  process.env.npm_config_registry = normalizeRegistry(config.registry, configPath);
   if (typeof config.NODE_HOME === 'string' && config.NODE_HOME.trim()) process.env.NODE_HOME = config.NODE_HOME.trim();
   if (typeof config.PNPM_HOME === 'string' && config.PNPM_HOME.trim()) process.env.PNPM_HOME = config.PNPM_HOME.trim();
   if (typeof config.NPM_CONFIG_CACHE === 'string' && config.NPM_CONFIG_CACHE.trim()) process.env.npm_config_cache = config.NPM_CONFIG_CACHE.trim();
   if (typeof config.NPM_CONFIG_INIT_MODULE === 'string' && config.NPM_CONFIG_INIT_MODULE.trim()) process.env.npm_config_init_module = config.NPM_CONFIG_INIT_MODULE.trim();
+
+  ensureDir(config.NODE_HOME);
+  ensureDir(config.PNPM_HOME);
+  ensureDir(config.envPath);
+  ensureDir(config.NPM_CONFIG_CACHE);
+
+  if (config.NPM_CONFIG_INIT_MODULE && !fs.existsSync(String(config.NPM_CONFIG_INIT_MODULE))) {
+    throw new Error(
+      `node-env.json 配置错误：NPM_CONFIG_INIT_MODULE 文件不存在：${String(config.NPM_CONFIG_INIT_MODULE)}。\n` +
+      `请在宝塔面板 Node.js 版本管理器中确认 init-module 路径并更新 ${configPath}`,
+    );
+  }
 
   const nodeDir = typeof config.nodePath === 'string' ? path.dirname(config.nodePath) : '';
   const pnpmDir = typeof config.pnpmPath === 'string' ? path.dirname(config.pnpmPath) : '';
@@ -214,6 +260,46 @@ function run(name, command, args, extraEnv) {
   return child;
 }
 
+function pathExists(p) {
+  try {
+    fs.accessSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getBinPath(projectDir, binName) {
+  const ext = process.platform === 'win32' ? '.cmd' : '';
+  return path.join(projectDir, 'node_modules', '.bin', `${binName}${ext}`);
+}
+
+function ensureDepsInstalled(pnpm) {
+  const rootDir = path.resolve(__dirname, '..');
+  const webDir = path.join(rootDir, 'web');
+
+  const missingDirs = [];
+  if (!pathExists(path.join(rootDir, 'node_modules'))) missingDirs.push('node_modules（后端）');
+  if (!pathExists(path.join(webDir, 'node_modules'))) missingDirs.push('web/node_modules（前端）');
+
+  const missingBins = [];
+  if (!pathExists(getBinPath(rootDir, 'nodemon'))) missingBins.push('nodemon（后端 dev 依赖）');
+  if (!pathExists(getBinPath(rootDir, 'ts-node'))) missingBins.push('ts-node（后端 dev 依赖）');
+  if (!pathExists(getBinPath(webDir, 'astro'))) missingBins.push('astro（前端 dev 依赖）');
+
+  if (!missingDirs.length && !missingBins.length) return true;
+
+  const hints = [];
+  hints.push('[dev:all] 依赖未安装或不完整，导致启动失败。');
+  if (missingDirs.length) hints.push(`[dev:all] 缺少目录：${missingDirs.join('、')}`);
+  if (missingBins.length) hints.push(`[dev:all] 缺少命令：${missingBins.join('、')}`);
+  hints.push('[dev:all] 请先安装依赖：');
+  hints.push(`[dev:all]   1) 在项目根目录执行：${[pnpm.command, ...pnpm.args, 'install'].join(' ')}`);
+  hints.push(`[dev:all]   2) 在 web/ 目录执行：${[pnpm.command, ...pnpm.args, '-C', 'web', 'install'].join(' ')}`);
+  console.error(hints.join(os.EOL));
+  return false;
+}
+
 async function main() {
   const lockFilePath = String(process.env.DEVALL_LOCK_PATH || '').trim() || getDefaultLockPath();
   let lock;
@@ -230,6 +316,12 @@ async function main() {
   const { configPath, config } = loadNodeEnvConfig();
   applyNodeEnv(config, configPath);
   if (!String(process.env.npm_config_registry || '').trim()) process.env.npm_config_registry = DEFAULT_REGISTRY;
+
+  const pnpm = getPnpmInvoker(config);
+  if (!ensureDepsInstalled(pnpm)) {
+    lock.release();
+    process.exit(1);
+  }
 
   const portMode = String(process.env.DEVALL_PORT_MODE || 'strict').trim();
   const requestedBackendPort = normalizePort(process.env.BACKEND_PORT || process.env.PORT, 9011);
@@ -285,8 +377,6 @@ async function main() {
 
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
-
-  const pnpm = getPnpmInvoker(config);
 
   backend = run('backend', pnpm.command, [...pnpm.args, 'run', 'dev'], {
     PORT: String(backendPort),
